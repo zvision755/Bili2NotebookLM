@@ -68,6 +68,6 @@ FFmpeg 许可注意：Homebrew 的 ffmpeg 为本机调用的系统工具，本�
 
 ## 6. 命令名与依赖核对（2026-11-09）
 - 命令：`bili2nb`（短）与 `bili2notebooklm`（长，与项目名一致）。冲突检查：本机 `which` 均不存在；PyPI 上 `bili2nb`、`bili2notebooklm` 均 404（未被占用）；Homebrew 无同名公式。未检查 GitHub 上的同名项目与其他包管理器（npm/cargo 等）。
-- `uv tool install .` 实际选用 Python **3.14.7**（不是开发用的 3.12.15）；两者均已跑全套测试（206 passed）和真实 convert，结果一致（17 张截图/2,365,614 字节 PDF）。
+- `uv tool install .` 实际选用 Python **3.14.7**（不是开发用的 3.12.15）；两者均已跑全套测试（通过）和真实 convert，结果一致（17 张截图/2,365,614 字节 PDF）。
 - 依赖树中 `scenedetect` 会拉入 `opencv-python`，与 `opencv-python-headless` 同时安装（同为 5.0.0.93，共用 `cv2` 目录）。当前工作正常，但属于潜在冲突点。
 - **已消除 opencv 双装（2026-11-09）**：`pyproject.toml` 的 `[tool.uv] override-dependencies` 对 `uv sync` 生效；`uv tool install` 不读取该节，故另附 `overrides.txt`，安装命令为 `uv tool install . --overrides overrides.txt`。验证：开发环境、干净拷贝 `uv sync`、`uv tool install` 三处都只剩 `opencv-python-headless`；`--frames scene`（唯一用到 scenedetect 的路径）真实运行正常、无 warning；pytest 209 passed。注意：卸载 `opencv-python` 会删掉共用的 `cv2` 文件，因此处理开发环境时必须随后 `--reinstall-package opencv-python-headless`（已做）。

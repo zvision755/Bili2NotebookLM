@@ -146,7 +146,7 @@ bili2notebooklm convert BV1VV4y1V7Pz --output ./out      # 产物：audio.m4a、
 
 | 类别 | 依赖 | 说明 |
 |---|---|---|
-| Python | **≥ 3.11** | 已实测 3.12.15 与 3.14.7（各跑全套测试 + 真实 convert）；3.11/3.13/3.15 未实测 |
+| Python | **≥ 3.11** | CI 验证 3.11 与 3.12（Ubuntu、Windows；macOS 为 3.12）；开发机另测过 3.14.7；3.13 / 3.15 未实测 |
 | 系统工具 | **ffmpeg + ffprobe**（实测 9.0.2） | 用于音频校验/必要时转码；不会随 Python 包安装，需自行装 |
 | B 站下载 | `yt-dlp`（Python 包，锁定 2026.10.26，要求 ≥ 2026.1.1） | 作为库调用，**不需要单独装 yt-dlp 命令**；B 站改版时升级它即可 |
 | NotebookLM | `notebooklm-py[browser,impersonate]` **==0.8.6**（非官方，MIT） | 带 playwright（仅登录用）和 curl_cffi（上传必须）；`--browser chrome` 用系统 Chrome，无需下载浏览器 |
