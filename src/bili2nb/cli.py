@@ -230,19 +230,22 @@ class Frames(str, Enum):
 
 @app.command("convert")
 def convert(
-    url: str = typer.Argument(..., help="Bilibili video URL (bilibili.com or b23.tv)"),
+    url: str = typer.Argument(..., help="Bilibili video URL or BV number (bilibili.com or b23.tv)"),
     frames: Frames = typer.Option(Frames.auto, "--frames", help="Keyframe mode."),
     output: Path = typer.Option(None, "--output", help="Output root dir (default: app data dir)."),
-    part: int = typer.Option(None, "--part", min=1, help="Part (P) number of a multi-part video."),
+    part: int = typer.Option(
+        None, "--part", min=1, help="Only this part (P) of a multi-part video. Default: ALL parts."
+    ),
     audio_only: bool = typer.Option(False, "--audio-only", help="Audio only (same as --frames none)."),
     as_json: bool = typer.Option(False, "--json", help="Single JSON object on stdout."),
 ):
-    """Convert locally only (no Google login): audio + keyframes.pdf + manifest.json."""
-    from bili2nb.pipeline import convert as run
+    """Convert locally only (no Google login): per part audio + keyframes.pdf + manifest.json."""
+    from bili2nb.batch import convert_parts
 
     try:
-        res = run(
-            normalize_input(url), output_root=output, frames_mode=frames.value, part=part, audio_only=audio_only
+        res = convert_parts(
+            normalize_input(url), output_root=output, frames_mode=frames.value, part=part,
+            audio_only=audio_only,
         )
     except KeyboardInterrupt:
         raise _fail(Bili2nbError("INTERRUPTED", "已中断，临时文件已清理，未生成不完整的产物。"), as_json)
@@ -251,17 +254,18 @@ def convert(
     if as_json:
         sys.stdout.write(json.dumps(res, ensure_ascii=False) + "\n")
         return
-    typer.echo(f"OK  {res['video_title']}")
-    typer.echo(f"  output : {res['output_dir']}{'  (reused)' if res.get('reused') else ''}")
-    typer.echo(f"  audio  : {res['audio']['file']}  {res['audio']['bytes'] / 1e6:.1f} MB")
-    v = res["visual"]
-    if v["status"] == "ok":
-        typer.echo(f"  pdf    : keyframes.pdf  {v['pages']} pages  {v['pdf_bytes'] / 1e6:.1f} MB")
-    else:
-        typer.echo(f"  visual : {v['status']} - {v.get('reason', '')}")
+    typer.echo(f"OK  {res['video_title']}  ({len(res['parts'])}/{res['part_count']} part(s))")
+    typer.echo(f"  output : {res['output_dir']}")
+    for r in res["parts"]:
+        tag = "  (reused)" if r.get("reused") else ""
+        typer.echo(f"  P{r['part']:<3} {r['audio']['file']}  {r['audio']['bytes'] / 1e6:.1f} MB{tag}")
+        v = r["visual"]
+        if v["status"] == "ok":
+            typer.echo(f"       keyframes.pdf  {v['pages']} pages  {v['pdf_bytes'] / 1e6:.1f} MB")
+        else:
+            typer.echo(f"       visual : {v['status']} - {v.get('reason', '')}")
     for w in res.get("warnings", []):
         typer.echo(f"  warning: {w}")
-    typer.echo(f"  elapsed: {res['elapsed_sec']}s  {res['timings_sec']}")
 
 
 def _print_job(res: dict) -> None:

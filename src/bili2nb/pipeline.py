@@ -17,7 +17,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from bili2nb import __version__
+from bili2nb import __version__, layout
 from bili2nb.bilibili import downloader as dl
 from bili2nb.bilibili.parser import VideoRef, parse_url
 from bili2nb.config import default_output_root, work_root
@@ -42,17 +42,7 @@ def _check_disk(duration: float, want_video: bool) -> None:
         )
 
 
-def _read_manifest(d: Path) -> dict | None:
-    """Manifest of a COMPLETE product only: marked complete AND its files really exist."""
-    try:
-        m = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    if m.get("complete") is not True or not (d / m.get("audio", {}).get("file", "")).is_file():
-        return None
-    if m.get("visual", {}).get("status") == "ok" and not (d / "keyframes.pdf").is_file():
-        return None
-    return m
+_read_manifest = layout.read_manifest  # kept name; the logic lives with the layout
 
 
 def _publish(stage: Path, final: Path) -> None:
@@ -109,13 +99,16 @@ def convert(
     if info.cid is None:
         warnings.append("未能获取 CID，video_key 使用分 P 序号代替。")
     log(f"标题: {info.title} | 时长 {frames_mod.hms(info.duration)} | key {info.video_key}")
-    if ref.part is None and info.part_count > 1:
-        warnings.append(f"该视频共 {info.part_count} 个分 P，未指定，默认处理 P1（用 --part N 选择）。")
 
     out_root = (output_root or default_output_root()).expanduser()
-    final = out_root / info.video_key
     want_visual = frames_mode != "none"
+    final = layout.resolve_part_dir(out_root, info)
     cached = _read_manifest(final) if final.exists() else None
+    if cached is None:  # a complete V1.1-style folder (<BV>_<CID>) is re-used read-only, never moved
+        old = layout.legacy_dir(out_root, info)
+        old_m = _read_manifest(old) if old.is_dir() else None
+        if old_m is not None and old_m.get("options", {}).get("frames_mode") == frames_mode:
+            final, cached = old, old_m
     if cached and cached.get("options", {}).get("frames_mode") == frames_mode:
         log(f"已存在完整产物，直接复用: {final}")
         cached["reused"] = True
@@ -192,6 +185,7 @@ def convert(
             "video_id": info.video_id,
             "cid": info.cid,
             "part": info.part,
+            "part_title": info.part_title,
             "video_title": info.title,
             "uploader": info.uploader,
             "source_url": info.webpage_url,

@@ -123,6 +123,7 @@ def env(tmp_path, monkeypatch):
         return p
 
     monkeypatch.setattr(dl, "fetch_info", lambda ref: info)
+    monkeypatch.setattr(dl, "plan_parts", lambda ref: [info])  # CLI path: no network
     monkeypatch.setattr(dl, "download_audio", fake_audio)
     monkeypatch.setattr(dl, "download_video", fake_video)
     return tmp_path, calls
@@ -131,7 +132,7 @@ def env(tmp_path, monkeypatch):
 def test_convert_success_outputs_and_manifest(env):
     tmp, _ = env
     res = pl.convert(URL, output_root=tmp / "out", frames_mode="slides", log=lambda m: None)
-    d = tmp / "out" / "BV1GJ411x7h7_999"
+    d = tmp / "out" / "BV1GJ411x7h7" / "P01_测试视频"
     assert res["status"] == "ok" and not res["reused"]
     assert (d / "audio.m4a").exists() and (d / "keyframes.pdf").exists()
     m = json.loads((d / "manifest.json").read_text())
@@ -155,7 +156,7 @@ def test_audio_only_skips_video_download(env):
     tmp, calls = env
     res = pl.convert(URL, output_root=tmp / "out", audio_only=True, log=lambda m: None)
     assert calls["video"] == 0 and "pdf_path" not in res
-    assert res["visual"]["status"] == "skipped" and (tmp / "out/BV1GJ411x7h7_999/audio.m4a").exists()
+    assert res["visual"]["status"] == "skipped" and (tmp / "out/BV1GJ411x7h7/P01_测试视频/audio.m4a").exists()
 
 
 def test_different_mode_replaces_own_previous_output(env):
@@ -190,13 +191,13 @@ def test_failure_leaves_no_half_finished_cache(env, monkeypatch):
     monkeypatch.setattr(dl, "download_video", broken_video)
     with pytest.raises(Bili2nbError):
         pl.convert(URL, output_root=tmp / "out", frames_mode="slides", log=lambda m: None)
-    assert not (tmp / "out" / "BV1GJ411x7h7_999").exists()
+    assert not (tmp / "out" / "BV1GJ411x7h7" / "P01_测试视频").exists()
     assert not list((tmp / "home" / "work").iterdir())
 
 
 def test_existing_foreign_directory_is_never_overwritten(env):
     tmp, _ = env
-    foreign = tmp / "out" / "BV1GJ411x7h7_999"
+    foreign = tmp / "out" / "BV1GJ411x7h7" / "P01_测试视频"
     foreign.mkdir(parents=True)
     (foreign / "mine.txt").write_text("keep")
     with pytest.raises(Bili2nbError):
@@ -281,3 +282,25 @@ def test_cli_help_lists_only_implemented_options():
         assert opt in out
     for not_yet in ("--keep-files", "--force-new", "--no-wait"):
         assert not_yet not in out
+
+
+def test_legacy_v11_folder_is_reused_read_only(env):
+    """A complete V1.1 `<BV>_<CID>` folder is reused, never moved or rewritten."""
+    tmp, calls = env
+    legacy = tmp / "out" / "BV1GJ411x7h7_999"
+    pl.convert(URL, output_root=tmp / "out", frames_mode="slides", log=lambda m: None)
+    new = tmp / "out" / "BV1GJ411x7h7" / "P01_测试视频"
+    new.rename(legacy)  # pretend an old run produced it
+    before = sorted(p.name for p in legacy.iterdir())
+    res = pl.convert(URL, output_root=tmp / "out", frames_mode="slides", log=lambda m: None)
+    assert res["reused"] is True and res["output_dir"] == str(legacy)
+    assert calls == {"audio": 1, "video": 1} and sorted(p.name for p in legacy.iterdir()) == before
+
+
+def test_renamed_part_title_still_hits_the_cid_cache(env, monkeypatch):
+    tmp, calls = env
+    pl.convert(URL, output_root=tmp / "out", frames_mode="slides", log=lambda m: None)
+    renamed = VideoInfo("BV1GJ411x7h7", "999", 1, "改名后的标题", "作者", 24.0, URL)
+    monkeypatch.setattr(dl, "fetch_info", lambda ref: renamed)
+    res = pl.convert(URL, output_root=tmp / "out", frames_mode="slides", log=lambda m: None)
+    assert res["reused"] is True and calls == {"audio": 1, "video": 1}

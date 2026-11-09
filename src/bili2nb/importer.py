@@ -20,9 +20,7 @@ from bili2nb.config import default_output_root
 from bili2nb.errors import Bili2nbError
 from bili2nb.jobs.db import COMPLETED, FAILED, INTERRUPTED, RUNNING, Job, JobStore
 from bili2nb.notebook.adapter import make_title, notebook_url
-
-RETRYABLE = ("RATE_LIMITED", "NETWORK_ERROR")
-MAX_ATTEMPTS = 5  # bounded: 1 try + 4 backoff retries, then fail with a resumable job
+from bili2nb.retry import MAX_ATTEMPTS, RETRYABLE, with_backoff  # noqa: F401  (re-exported)
 
 
 def _stderr(msg: str) -> None:
@@ -58,16 +56,7 @@ class Importer:
     # ------------------------------------------------------------ helpers
     def _backoff(self, fn: Callable[[], object], what: str):
         """Bounded retry with exponential backoff, only for errors safe to repeat."""
-        for i in range(MAX_ATTEMPTS):
-            try:
-                return fn()
-            except Bili2nbError as e:
-                if e.code not in RETRYABLE or i == MAX_ATTEMPTS - 1:
-                    raise
-                delay = self.backoff_base * (3**i)
-                self.log(f"  {what}: {e.code}，{delay:.0f}s 后重试 ({i + 1}/{MAX_ATTEMPTS - 1})…")
-                self.sleep(delay)
-        raise AssertionError("unreachable")
+        return with_backoff(fn, what, log=self.log, sleep=self.sleep, base=self.backoff_base)
 
     def _preflight(self) -> None:
         """Verify the NotebookLM session BEFORE any media is downloaded."""

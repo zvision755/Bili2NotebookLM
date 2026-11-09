@@ -27,6 +27,7 @@ class VideoInfo:
     webpage_url: str
     part_count: int = 1
     part_title: str = ""  # the 分P's own title (empty when unknown / single-part video)
+    series_title: str = ""  # the whole video's title (same for every part)
 
     @property
     def video_key(self) -> str:
@@ -219,7 +220,7 @@ def _part_info(meta: VideoMeta, ref: VideoRef, page: dict, n: int, total: int) -
         title = f"{title} (P{n} {pname})"
     return VideoInfo(
         video_id=bvid, cid=str(cid) if cid else None, part=n, title=title, uploader=meta.uploader,
-        duration=float(dur), part_count=total, part_title=pname,
+        duration=float(dur), part_count=total, part_title=pname, series_title=meta.title,
         webpage_url=VideoRef(bvid, n).url if total > 1 or ref.part else VideoRef(bvid, None).url,
     )
 
