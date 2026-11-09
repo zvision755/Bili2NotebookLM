@@ -28,7 +28,8 @@ bili2nb doctor                    # 检查本机环境
 | Linux：README 安装块在干净的 Ubuntu 上逐字执行 | **已在 GitHub Actions 验证** |
 | Windows / Linux：真实 Google 浏览器登录、真实 NotebookLM 导入、真实 B 站下载 | **尚未验证**（CI 没有账号） |
 | Windows：README 中的 `winget` 软件包 ID | 已核对包 ID 存在，**尚未在真实 Windows 上执行** |
-| Python 3.13 / 3.14 / 3.15 | 未纳入 CI（开发机曾测过 3.14.7） |
+| Python 3.14 | `uv tool install` 默认选用 3.14：Ubuntu 上 README 安装块以 3.14.4 安装并通过 `doctor` 与 smoke（CI）；完整测试仅在开发机的 3.14.7 上跑过，未纳入 CI 矩阵 |
+| Python 3.13 / 3.15 | 未测试 |
 | 手机端 NotebookLM 同步 | 由 Google 负责，**不属于**验收范围 |
 
 ## 已知限制与风险
