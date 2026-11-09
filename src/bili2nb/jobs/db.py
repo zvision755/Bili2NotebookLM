@@ -37,11 +37,13 @@ CREATE TABLE IF NOT EXISTS jobs (
   error_code TEXT, error_message TEXT, error_detail TEXT,
   warnings TEXT NOT NULL DEFAULT '[]', timings TEXT NOT NULL DEFAULT '{}',
   attempts INTEGER NOT NULL DEFAULT 0, superseded INTEGER NOT NULL DEFAULT 0,
-  orphans TEXT NOT NULL DEFAULT '[]'
+  orphans TEXT NOT NULL DEFAULT '[]',
+  parts TEXT NOT NULL DEFAULT '[]',
+  plan TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_key ON jobs(video_key, account_key, mode);
 """
-_JSON_FIELDS = {"options", "sources", "ready", "visual", "warnings", "timings", "orphans"}
+_JSON_FIELDS = {"options", "sources", "ready", "visual", "warnings", "timings", "orphans", "parts", "plan"}
 
 
 def _now() -> str:
@@ -82,6 +84,12 @@ class Job:
     # This is the ONLY evidence (besides 'created during the current call') that lets the tool
     # delete a source: same-name alone never is.
     orphans: list = field(default_factory=list)
+    # V1.2 (multi-part): one Job = one video import that may contain several parts.
+    #   parts: per-part state  [{part, cid, title, duration, dir, audio_path, pdf_path, visual, convert, ...}]
+    #   plan:  frozen upload plan {strategy, source_limit, items:[{key, kind, parts, path, title, source_id, ready}]}
+    # Both are EMPTY for jobs created before V1.2 (legacy single-part jobs keep using the old columns).
+    parts: list = field(default_factory=list)
+    plan: dict = field(default_factory=dict)
 
 
 class JobStore:
@@ -100,9 +108,10 @@ class JobStore:
     def _migrate(c: sqlite3.Connection) -> None:
         """Add columns introduced after V1 to existing databases (idempotent)."""
         cols = {r[1] for r in c.execute("PRAGMA table_info(jobs)")}
-        if "orphans" not in cols:
-            c.execute("ALTER TABLE jobs ADD COLUMN orphans TEXT NOT NULL DEFAULT '[]'")
-            c.commit()
+        for name, default in (("orphans", "'[]'"), ("parts", "'[]'"), ("plan", "'{}'")):
+            if name not in cols:
+                c.execute(f"ALTER TABLE jobs ADD COLUMN {name} TEXT NOT NULL DEFAULT {default}")
+        c.commit()
 
     def _conn(self) -> sqlite3.Connection:
         c = sqlite3.connect(self.path, timeout=30)
