@@ -18,6 +18,7 @@ from bili2nb.bilibili import downloader as dl
 from bili2nb.bilibili.parser import VideoRef, parse_url
 from bili2nb.config import default_output_root
 from bili2nb.errors import Bili2nbError
+from bili2nb.importer_multi import MultiPartMixin
 from bili2nb.jobs.db import COMPLETED, FAILED, INTERRUPTED, RUNNING, Job, JobStore
 from bili2nb.notebook.adapter import make_title, notebook_url
 from bili2nb.retry import MAX_ATTEMPTS, RETRYABLE, with_backoff  # noqa: F401  (re-exported)
@@ -33,7 +34,7 @@ def source_title(kind: str, video_title: str) -> str:
     return t if len(t) <= 100 else t[:99] + "…"
 
 
-class Importer:
+class Importer(MultiPartMixin):
     def __init__(
         self,
         store: JobStore,
@@ -41,6 +42,7 @@ class Importer:
         *,
         convert_fn: Callable[..., dict] | None = None,
         fetch_info_fn: Callable[[VideoRef], dl.VideoInfo] | None = None,
+        plan_parts_fn: Callable[[VideoRef], list[dl.VideoInfo]] | None = None,
         sleep: Callable[[float], None] = time.sleep,
         log: Callable[[str], None] = _stderr,
         backoff_base: float = 3.0,
@@ -48,7 +50,12 @@ class Importer:
         self.store = store
         self.adapter = adapter
         self._convert = convert_fn
-        self._fetch_info = fetch_info_fn
+        if plan_parts_fn is not None:
+            self._plan_fn = plan_parts_fn
+        elif fetch_info_fn is not None:  # single-part helper (V1.1 callers/tests)
+            self._plan_fn = lambda ref: [fetch_info_fn(ref)]
+        else:
+            self._plan_fn = dl.plan_parts
         self.sleep = sleep
         self.log = log
         self.backoff_base = backoff_base
@@ -100,7 +107,12 @@ class Importer:
         mode = "none" if audio_only else frames_mode
         self._preflight()
         self.log(f"解析视频信息: {ref.url}")
-        info = (self._fetch_info or dl.fetch_info)(ref)
+        infos = self._plan_fn(ref)
+        if len(infos) > 1:  # several parts (no ?p=): one notebook for ALL of them
+            return self._run_multi(
+                ref, infos, mode=mode, frames_mode=frames_mode, audio_only=audio_only,
+                output=output, keep_files=keep_files, force_new=force_new)
+        info = infos[0]
         account = self.adapter.account_key
         existing = self.store.find_active(info.video_key, account, mode)
         if existing and not force_new:
@@ -145,10 +157,13 @@ class Importer:
         job = self.store.update(job.job_id, status=RUNNING, error_code=None, error_message=None,
                                 error_detail=None)
         try:
-            job = self._stage_convert(job, info)
-            job = self._stage_notebook(job)
-            job = self._stage_upload(job)
-            job = self._stage_ready(job)
+            if job.parts:  # multi-part job (V1.2)
+                job = self._multi_stages(job)
+            else:  # single part: the proven V1.1 path, also used by every pre-V1.2 job
+                job = self._stage_convert(job, info)
+                job = self._stage_notebook(job)
+                job = self._stage_upload(job)
+                job = self._stage_ready(job)
             job = self.store.update(job.job_id, status=COMPLETED, stage="done")
             job = self._cleanup(job)
             return self.result(job)
@@ -321,6 +336,16 @@ def job_to_dict(job: Job, *, reused: bool = False) -> dict:
         "created_at": job.created_at,
         "updated_at": job.updated_at,
     }
+    if job.parts:
+        plan = job.plan
+        d["part_count"] = len(job.parts)
+        d["parts"] = [{k: v for k, v in p.items() if k != "info"} for p in job.parts]
+        d["upload_plan"] = {k: plan.get(k) for k in ("strategy", "source_limit", "limit_origin")}
+        d["sources"] = [
+            {"key": i["key"], "kind": i["kind"], "parts": i["parts"], "title": i["title"],
+             "merged": i["merge"], "bytes": i["bytes"], "source_id": i["source_id"], "ready": i["ready"]}
+            for i in plan.get("items", [])
+        ]
     if Importer._file_ok(job.audio_path):
         d["audio_path"] = job.audio_path
     if Importer._file_ok(job.pdf_path):

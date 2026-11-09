@@ -86,8 +86,9 @@ def plan_uploads(
     video_title: str,
     total_parts: int,
     limit_origin: str = "server",
-    group_max: int = GROUP_MAX_BYTES,
+    group_max: int | None = None,
 ) -> dict:
+    group_max = GROUP_MAX_BYTES if group_max is None else group_max
     legacy = total_parts == 1 and len(parts) == 1
 
     def title_for(p: PartFiles, kind: str) -> str:
@@ -130,11 +131,12 @@ def plan_uploads(
     return {"strategy": "merged", **base, "items": items}
 
 
-def estimate_feasibility(durations: list[float], *, limit: int, group_max: int = GROUP_MAX_BYTES) -> None:
+def estimate_feasibility(durations: list[float], *, limit: int, group_max: int | None = None) -> None:
     """Cheap pre-download check from durations alone, using a LOWER bound for audio size.
 
     Only rejects selections that cannot fit even in the best case, so it never blocks a valid import
     but saves downloading tens of hours of media that could never be uploaded anyway."""
+    group_max = GROUP_MAX_BYTES if group_max is None else group_max
     lower_bound = sum(durations) * _MIN_AUDIO_BYTES_PER_SEC
     min_audio_sources = max(1, math.ceil(lower_bound / group_max))
     if min_audio_sources > limit:

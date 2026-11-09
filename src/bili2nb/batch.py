@@ -61,6 +61,22 @@ def _manifest_rows(infos: list[dict], status: dict[int, str], results: dict[int,
     return rows
 
 
+def rows_from_job_parts(parts: list[dict]) -> list[dict]:
+    """Batch-manifest rows from the importer's per-part state (relative names only)."""
+    rows = []
+    for p in parts:
+        row = {"part": p["part"], "cid": p["cid"], "title": p["title"], "duration_sec": p["duration"],
+               "status": {"done": "done", "failed": "failed"}.get(p.get("convert"), "pending")}
+        if p.get("audio_path"):
+            row["dir"] = Path(p["dir"]).name if p.get("dir") else Path(p["audio_path"]).parent.name
+            row["audio_file"] = Path(p["audio_path"]).name
+            if p.get("pdf_path"):
+                row["pdf_file"] = Path(p["pdf_path"]).name
+            row["visual"] = p.get("visual", {}).get("status")
+        rows.append(row)
+    return rows
+
+
 def convert_parts(
     url: str,
     *,
