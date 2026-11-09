@@ -169,7 +169,7 @@ def test_setup_noninteractive_sets_work_dir_and_skips_login(iso, tmp_path):
 
 def test_setup_interactive_prompts_for_dir_and_login(iso, tmp_path, monkeypatch):
     logged = []
-    monkeypatch.setattr("bili2nb.notebook.auth.run_login", lambda browser="chromium", **k: logged.append(browser))
+    monkeypatch.setattr("bili2nb.notebook.auth.run_login", lambda browser=None, **k: logged.append(browser))
     target = tmp_path / "w2"
     # answers: work dir, then confirm login
     r = runner.invoke(cli.app, ["setup", "--browser", "chrome"], input=f"{target}\ny\n")

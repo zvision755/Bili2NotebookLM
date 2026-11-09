@@ -6,11 +6,8 @@ import io
 import sys
 from pathlib import Path
 
-import pytest
-
 from bili2nb import cli
 from bili2nb.media import pdf as pm
-from bili2nb.notebook import auth
 
 SRC = Path(__file__).resolve().parents[2] / "src"
 
@@ -68,13 +65,6 @@ def test_font_candidates_cover_each_platform(monkeypatch):
     assert any(p.endswith("/fonts/msyh.ttc") for p in paths)
     monkeypatch.setattr(sys, "platform", "linux")
     assert pm.platform_font_candidates()  # never empty
-
-
-# ---------------------------------------------------------------- login browser default
-@pytest.mark.parametrize("plat,expected", [("darwin", "chrome"), ("win32", "msedge"), ("linux", "chrome")])
-def test_default_browser_per_platform(monkeypatch, plat, expected):
-    monkeypatch.setattr(sys, "platform", plat)
-    assert auth.default_browser() == expected
 
 
 # ---------------------------------------------------------------- stdout/stderr encoding

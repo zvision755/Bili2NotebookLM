@@ -12,7 +12,6 @@ from typer.core import TyperGroup
 from bili2nb import config
 from bili2nb.bilibili.parser import normalize_input
 from bili2nb.errors import Bili2nbError
-from bili2nb.notebook.auth import default_browser
 
 
 def ensure_utf8_streams() -> None:
@@ -82,7 +81,7 @@ def _make_store():
     return JobStore()
 
 
-def _setup_flow(work_dir: Path | None, browser: str, login: bool | None, as_json: bool) -> dict:
+def _setup_flow(work_dir: Path | None, browser: str | None, login: bool | None, as_json: bool) -> dict:
     """Choose the work dir and (optionally) log in to Google. `login=None` means ask."""
     interactive_dir = work_dir is None
     if interactive_dir:
@@ -98,15 +97,13 @@ def _setup_flow(work_dir: Path | None, browser: str, login: bool | None, as_json
     if login is None and not as_json:
         login = typer.confirm("现在打开浏览器登录 Google（登录状态只保存在本机，不会经过本工具）？", default=True)
     if login:
-        from bili2nb.notebook import auth
-
-        auth.run_login(browser)
+        _interactive_login(browser, interactive=not as_json and _is_tty())
         state = "done"
     return {"status": "ok", "work_dir": str(chosen), "login": state}
 
 
 def _run_setup_wizard() -> None:
-    _setup_flow(None, default_browser(), None, False)
+    _setup_flow(None, None, None, False)
 
 
 def _ensure_setup(interactive: bool) -> None:
@@ -114,6 +111,19 @@ def _ensure_setup(interactive: bool) -> None:
     if interactive and not config.is_configured():
         typer.echo("首次使用：先做一次简单设置。")
         _run_setup_wizard()
+
+
+def _is_tty() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _interactive_login(browser: str | None, *, interactive: bool) -> None:
+    """The ONE login entry point (setup / auth login / AUTH_REQUIRED offer): same default everywhere."""
+    from bili2nb.notebook import auth
+
+    auth.login_with_fallback(
+        browser, interactive=interactive, confirm=lambda msg: typer.confirm(msg, default=True)
+    )
 
 
 def _make_importer():
@@ -135,22 +145,22 @@ def _with_login_offer(fn, as_json: bool):
         typer.echo(f"[AUTH_REQUIRED] {e.message}", err=True)
         if not typer.confirm("现在打开浏览器登录 Google？", default=True):
             raise
-        from bili2nb.notebook.auth import run_login
-
-        run_login()
+        _interactive_login(None, interactive=True)
         return fn()  # preflight runs before any download, so re-running is safe
 
 
 @app.command("setup")
 def setup(
     work_dir: Path = typer.Option(None, "--work-dir", help="Work directory (skips the prompt)."),
-    browser: str = typer.Option(None, help="chrome, msedge or chromium (default: msedge on Windows, chrome elsewhere)."),
+    browser: str = typer.Option(
+        None, help="chromium (default on every OS; downloaded once, ~170 MB), or chrome / msedge to use an installed one."
+    ),
     no_login: bool = typer.Option(False, "--no-login", help="Do not open the Google login."),
     as_json: bool = typer.Option(False, "--json", help="Single JSON object on stdout."),
 ):
     """First-time setup: choose the work directory and log in to Google (once)."""
     try:
-        res = _setup_flow(work_dir, browser or default_browser(), False if no_login else None, as_json)
+        res = _setup_flow(work_dir, browser, False if no_login else None, as_json)
     except Bili2nbError as e:
         raise _fail(e, as_json) from None
     if as_json:
@@ -185,14 +195,12 @@ def doctor_cmd(
 @auth_app.command("login")
 def auth_login(
     browser: str = typer.Option(
-        None, help="chrome, msedge or chromium (bundled Playwright). Default: msedge on Windows, chrome elsewhere."
+        None, help="chromium (default on every OS; downloaded once, ~170 MB), or chrome / msedge to use an installed one."
     ),
 ):
     """One-time interactive Google sign-in in a browser window (you sign in yourself)."""
-    from bili2nb.notebook.auth import run_login
-
     try:
-        run_login(browser or default_browser())
+        _interactive_login(browser, interactive=_is_tty())
     except Bili2nbError as e:
         raise _fail(e, False)
     typer.echo("Login finished. Verify with: bili2nb auth check", err=True)
