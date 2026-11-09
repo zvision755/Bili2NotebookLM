@@ -260,6 +260,7 @@ class NotebookAdapter:
         *,
         reconcile_sec: float = 90.0,
         owned=(),
+        taken=(),
     ) -> str:
         """Upload one file WITHOUT waiting for processing; returns the source id.
 
@@ -277,10 +278,16 @@ class NotebookAdapter:
             file name/title, and are stuck; and/or
           * the id the SDK attached to its exception (`source_id`).
         READY/PROCESSING sources are never deleted.
+
+        `taken` = ids of sources this job already assigned to OTHER items. They are never reused
+        as "this file's earlier upload": every part of a multi-part video uploads a file with the
+        same name (audio.m4a / keyframes.pdf), and the display-title rename does not reliably
+        stick, so a bare name match would swallow the next part's upload (live, 2026-11-10).
         """
         sdk_compat.require("upload_file")  # stop BEFORE any cloud write if the SDK changed
         names = {path.name} | ({title} if title else set())
         owned_ids = {*owned, *self._pending_orphans}
+        taken_ids = set(taken)
 
         async def op(client):
             if os.environ.get("BILI2NB_CHUNKED_UPLOAD", "1") != "0":
@@ -291,7 +298,8 @@ class NotebookAdapter:
             before_ids = {s.id for s in before}
             # (1) leftovers we can PROVE are ours from earlier attempts
             await self._delete_owned(client, notebook_id, before, owned_ids)
-            usable = [s for s in before if s.title in names and s.status.name in _USABLE]
+            usable = [s for s in before
+                      if s.id not in taken_ids and s.title in names and s.status.name in _USABLE]
             if usable:
                 return usable[0].id
             try:
@@ -391,6 +399,27 @@ class NotebookAdapter:
                 SourceInfo(s.id, s.title, s.status.name)
                 for s in await client.sources.list(notebook_id)
             ]
+
+        return self._run(op, default="NETWORK_ERROR")
+
+    def finalize_sources(self, notebook_id: str, titles: dict[str, str]) -> tuple[list[str], list[str]]:
+        """After READY: check what is REALLY in the notebook and apply the display titles.
+
+        `titles` maps source id -> wanted title. Returns (missing, untitled): ids that are not in
+        the cloud at all, and ids still carrying another title after a best-effort rename (the
+        server often keeps the file name; harmless for content, so it is only a warning). Only
+        sources this job recorded are renamed; nothing is ever deleted here."""
+
+        async def op(client):
+            have = {s.id: s for s in await client.sources.list(notebook_id)}
+            missing = sorted(i for i in titles if i not in have)
+            for sid, want in titles.items():
+                if sid in have and have[sid].title != want:
+                    with contextlib.suppress(Exception):  # cosmetic; reported via `untitled`
+                        await client.sources.rename(notebook_id, sid, want)
+            now = {s.id: s for s in await client.sources.list(notebook_id)}
+            untitled = sorted(i for i, want in titles.items() if i in now and now[i].title != want)
+            return missing, untitled
 
         return self._run(op, default="NETWORK_ERROR")
 

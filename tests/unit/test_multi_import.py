@@ -38,15 +38,20 @@ class MultiNLM(FakeNotebookLM):
         self.title_failures: dict[str, list[BaseException]] = {}
         self.upload_hook = None
         self.paths: dict[str, Path] = {}
+        self.taken_seen: list[tuple[str, ...]] = []
 
     def source_limit(self):
         if self.limit_error:
             raise self.limit_error
         return self.limit, self.limit_origin
 
-    def upload_file(self, nb, path, title=None, *, owned=()):
+    def finalize_sources(self, nb, titles):
+        return sorted(i for i in titles if i not in self.notebooks[nb]), []
+
+    def upload_file(self, nb, path, title=None, *, owned=(), taken=()):
         self.titles.append(title)
         self.owned_seen.append(tuple(owned))
+        self.taken_seen.append(tuple(taken))
         if self.upload_hook:
             self.upload_hook(title)
         q = self.title_failures.get(title)

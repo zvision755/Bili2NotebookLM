@@ -234,18 +234,46 @@ class MultiPartMixin:
             if path is None or not path.is_file():
                 raise Bili2nbError("MEDIA_ERROR", f"待上传文件不存在: {it['key']}。请重新运行 retry。")
             self.log(f"阶段 3/4：上传 {it['title']}（{path.stat().st_size / 1e6:.1f} MB）")
+            taken = tuple(o["source_id"] for o in plan["items"] if o is not it and o["source_id"])
             try:
                 sid = self._backoff(
-                    lambda path=path, title=it["title"], owned=tuple(job.orphans):
-                        self.adapter.upload_file(nb, path, title=title, owned=owned),
+                    lambda path=path, title=it["title"], owned=tuple(job.orphans), taken=taken:
+                        self.adapter.upload_file(nb, path, title=title, owned=owned, taken=taken),
                     f"upload {it['key']}")
             finally:
                 job = self._record_orphans(job)
+            if sid in taken:  # never record one cloud source for two items (live bug 2026-11-10)
+                raise Bili2nbError(
+                    "UPLOAD_FAILED",
+                    f"{it['title']} 的上传结果指向了已被其他来源占用的云端来源，已中止（不会误报成功）。",
+                    detail="duplicate source id")
             it["source_id"] = sid
             job = self.store.update(job.job_id, plan=plan, sources=self._mirror(plan, "source_id"))
             self.log(f"  source_id={sid}")
         job = self.store.update(job.job_id, stage="uploaded")
         return self._tick(job, "upload", t0)
+
+    def _m_finalize(self, job: Job, plan: dict) -> Job:
+        """Verify the cloud really holds every recorded source, then apply the part titles."""
+        nb = job.notebook_id
+        want = {it["source_id"]: it["title"] for it in plan["items"] if it["source_id"]}
+        missing, untitled = self._backoff(lambda: self.adapter.finalize_sources(nb, want), "verify sources")
+        if missing:
+            gone = [it["title"] for it in plan["items"] if it["source_id"] in missing]
+            for it in plan["items"]:
+                if it["source_id"] in missing:
+                    it["source_id"], it["ready"] = None, False
+            self.store.update(job.job_id, plan=plan, sources=self._mirror(plan, "source_id"),
+                              ready=self._mirror(plan, "ready"))
+            raise Bili2nbError(
+                "UPLOAD_FAILED",
+                f"云端笔记本里找不到这些来源：{'、'.join(gone)}。已清除记录，retry 会重新上传它们。",
+                detail="sources missing after READY")
+        for it in plan["items"]:
+            if it["source_id"] in untitled:
+                job = self._add_warning(
+                    job, f"来源《{it['title']}》的标题未能设置，云端暂显示为文件名（内容不受影响）。")
+        return job
 
     def _m_ready(self, job: Job) -> Job:
         t0 = time.monotonic()
@@ -275,5 +303,6 @@ class MultiPartMixin:
             it["ready"] = True
             job = self.store.update(job.job_id, plan=plan, ready=self._mirror(plan, "ready"))
             self.log(f"  {it['title']}: READY")
+        job = self._m_finalize(job, plan)
         job = self.store.update(job.job_id, stage="ready")
         return self._tick(job, "ready", t0)
