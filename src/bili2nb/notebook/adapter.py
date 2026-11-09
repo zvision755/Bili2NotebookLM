@@ -196,6 +196,22 @@ class NotebookAdapter:
 
         return self._run(op, default="AUTH_REQUIRED")
 
+    def source_limit(self) -> tuple[int, str]:
+        """Per-notebook source quota of THIS account -> (limit, origin).
+
+        origin "server": read from NotebookLM (public `settings.get_account_limits()`); "default":
+        the server gave no usable number, so the conservative documented free-tier value is used
+        (which can only make the planner merge MORE, never exceed a real quota)."""
+        from bili2nb.planner import DEFAULT_SOURCE_LIMIT
+
+        async def op(client):
+            return (await client.settings.get_account_limits()).source_limit
+
+        value = self._run(op, default="NETWORK_ERROR")
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value, "server"
+        return DEFAULT_SOURCE_LIMIT, "default"
+
     # -- notebooks / sources ---------------------------------------------
     def create_notebook(self, title: str, *, reconcile_sec: float = 20.0) -> str:
         """Create a notebook. Creation is NOT idempotent, so if the response is lost

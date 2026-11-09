@@ -383,3 +383,31 @@ def test_create_and_upload_run_with_fresh_connections(monkeypatch):
     calls.clear()
     assert a.notebook_exists("x") is False
     assert calls == []
+
+
+# ---------------------------------------------------------------- V1.2 account source quota
+def _limit_adapter(monkeypatch, value=None, exc=None):
+    import asyncio
+    from types import SimpleNamespace
+
+    from bili2nb.notebook.adapter import NotebookAdapter
+
+    class Settings:
+        async def get_account_limits(self):
+            if exc:
+                raise exc
+            return SimpleNamespace(source_limit=value)
+
+    client = SimpleNamespace(settings=Settings())
+    monkeypatch.setattr(NotebookAdapter, "_run", lambda self, op, **kw: asyncio.run(op(client)))
+    return NotebookAdapter()
+
+
+@pytest.mark.parametrize("value", [50, 300])
+def test_source_limit_comes_from_the_server(monkeypatch, value):
+    assert _limit_adapter(monkeypatch, value).source_limit() == (value, "server")
+
+
+@pytest.mark.parametrize("value", [None, 0, -3, True])
+def test_unusable_server_value_falls_back_to_the_conservative_default(monkeypatch, value):
+    assert _limit_adapter(monkeypatch, value).source_limit() == (50, "default")
