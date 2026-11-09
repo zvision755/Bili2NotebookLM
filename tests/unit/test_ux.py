@@ -241,3 +241,17 @@ def test_installed_command_names_match_project_name():
 def test_help_advertises_the_new_command_name():
     r = runner.invoke(cli.app, ["--help"])
     assert "bili2notebooklm" in plain(r.output)
+
+
+# ---------------------------------------------------------------- V1.2 multi-part output
+def test_print_job_lists_parts_and_sources_for_multi_part_jobs(capsys):
+    res = {"status": "completed", "job_id": "j", "stage": "done", "video_title": "系列",
+           "notebook_url": "https://notebooklm.google.com/notebook/nb-1", "mode": "frames:auto",
+           "source_count": 2, "part_count": 2, "reused": False, "timings_sec": {}, "warnings": [],
+           "upload_plan": {"strategy": "merged", "source_limit": 4, "limit_origin": "server"},
+           "parts": [{"part": 1, "convert": "done", "title": "第1集"}, {"part": 2, "convert": "done", "title": "第2集"}],
+           "sources": [{"title": "P01-P02｜音频", "source_id": "s1", "ready": True},
+                       {"title": "P01-P02｜关键帧PDF", "source_id": "s2", "ready": True}]}
+    cli._print_job(res)
+    out = capsys.readouterr().out
+    assert "plan: merged" in out and "P01-P02｜音频" in out and "第2集" in out and out.count("READY") == 2

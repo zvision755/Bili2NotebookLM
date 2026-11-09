@@ -55,7 +55,8 @@ class _DefaultImportGroup(TyperGroup):
 app = typer.Typer(
     cls=_DefaultImportGroup,
     help="Bilibili video -> NotebookLM (audio + keyframe PDF).\n\n"
-    "Usage: bili2notebooklm <B站链接 或 BV号>   (first run guides you through setup)",
+    "Usage: bili2notebooklm <B站链接 或 BV号>   (first run guides you through setup)\n\n"
+    "Multi-part (分P) videos: all parts go into ONE notebook unless you pick one with ?p=N / --part N.",
     no_args_is_help=True,
 )
 auth_app = typer.Typer(help="NotebookLM authentication.", no_args_is_help=True)
@@ -272,9 +273,19 @@ def _print_job(res: dict) -> None:
     typer.echo(f"{res['status'].upper()}  job {res['job_id']}  [{res['stage']}]  {res['video_title']}")
     if res.get("notebook_url"):
         typer.echo(f"  notebook : {res['notebook_url']}")
-    for kind, sid in res.get("source_ids", {}).items():
-        ready = "READY" if res.get("source_ready", {}).get(kind) else "not ready"
-        typer.echo(f"  source   : {kind:<5} {sid}  {ready}")
+    if res.get("parts"):
+        plan = res.get("upload_plan", {})
+        typer.echo(f"  parts    : {res['part_count']}  plan: {plan.get('strategy')}  "
+                   f"(account source limit {plan.get('source_limit')}, {plan.get('limit_origin')})")
+        for p in res["parts"]:
+            typer.echo(f"    P{p['part']:<3} {p['convert']:<8} {p['title']}")
+        for src in res.get("sources", []):
+            ready = "READY" if src["ready"] else ("uploaded" if src["source_id"] else "pending")
+            typer.echo(f"  source   : {src['title']}  {src['source_id'] or '-'}  {ready}")
+    else:
+        for kind, sid in res.get("source_ids", {}).items():
+            ready = "READY" if res.get("source_ready", {}).get(kind) else "not ready"
+            typer.echo(f"  source   : {kind:<5} {sid}  {ready}")
     typer.echo(f"  mode     : {res['mode']}  ({res['source_count']} source(s))"
                + ("  [reused existing]" if res.get("reused") else ""))
     for k in ("audio_path", "pdf_path"):
@@ -308,10 +319,14 @@ def import_(
     url: str = typer.Argument(..., help="Bilibili video URL (bilibili.com or b23.tv)"),
     frames: Frames = typer.Option(Frames.auto, "--frames", help="Keyframe mode."),
     output: Path = typer.Option(None, "--output", help="Keep imported files under this dir."),
-    part: int = typer.Option(None, "--part", min=1, help="Part (P) number of a multi-part video."),
+    part: int = typer.Option(
+        None, "--part", min=1, help="Only this part (P) of a multi-part video. Default: ALL parts, one notebook."
+    ),
     audio_only: bool = typer.Option(False, "--audio-only", help="Audio source only (no PDF)."),
     keep_files: bool = typer.Option(False, "--keep-files", help="Keep local audio/PDF after success."),
-    force_new: bool = typer.Option(False, "--force-new", help="Create another notebook for this video."),
+    force_new: bool = typer.Option(
+        False, "--force-new", help="Create another notebook for this video (exactly one, with the full part set)."
+    ),
     as_json: bool = typer.Option(False, "--json", help="Single JSON object on stdout."),
 ):
     """Convert and import into a NEW NotebookLM notebook (audio + keyframe PDF), wait until READY."""
