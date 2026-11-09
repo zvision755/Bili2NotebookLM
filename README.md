@@ -224,3 +224,9 @@ uv run ruff check src tests
 ```
 
 测试默认不联网（socket 被禁用）；真实 NotebookLM 验证需显式 `--live` 并经用户同意。验收记录见 `docs/TEST_REPORT.md`，环境与 SDK 事实见 `docs/ENVIRONMENT.md`，开发过程见 `docs/DEV_LOG.md`。
+
+## 许可证
+
+[MIT](LICENSE) © 2026 Ziwei Zhao。
+
+本工具与 Google、哔哩哔哩无关；NotebookLM 部分依赖非官方库，请自行评估使用风险并遵守相关服务条款。

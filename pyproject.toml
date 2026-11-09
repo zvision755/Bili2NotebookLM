@@ -5,6 +5,7 @@ description = "Bilibili video -> NotebookLM notebook (audio + keyframe PDF), loc
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
+authors = [{ name = "Ziwei Zhao" }]
 dependencies = [
   "typer>=0.12,<1",
   "yt-dlp>=2026.1.1",
