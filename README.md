@@ -8,7 +8,7 @@
 bili2notebooklm <B站链接 或 BV号>
 ```
 
-CLI 会自动下载音频、抽取关键画面生成 PDF、**新建一个笔记本**、上传这两个来源、等待 NotebookLM 处理完成（READY），最后打印笔记本链接。转录和总结都由 NotebookLM 自己完成，本地不跑 Whisper、不调用任何 LLM。
+CLI 会自动下载音频、抽取关键画面生成 PDF、**新建一个笔记本**、上传来源、等待 NotebookLM 处理完成（READY），最后打印笔记本链接。**多 P 视频默认处理全部分 P**：每个分 P 各自生成音频和 PDF，但所有分 P 只进**同一个**笔记本。转录和总结都由 NotebookLM 自己完成，本地不跑 Whisper、不调用任何 LLM。
 
 > 本机命令行。**macOS** 做过完整真实验证（含真实 NotebookLM 导入）；**macOS / Windows / Linux** 都由 GitHub Actions 自动测试（安装、离线测试、`doctor`、全局命令启动），但 Windows、Linux 上的真实 Google 登录与 NotebookLM 导入尚未验证。只处理你有权访问的公开视频；请遵守 B 站与版权规定，媒体文件只保存在本机。
 > NotebookLM 部分依赖**非官方**库 [notebooklm-py](https://github.com/teng-lin/notebooklm-py)（已固定 0.8.6），Google 可能随时改动接口导致失效。
@@ -39,7 +39,7 @@ bili2nb setup
 bili2nb BV1VV4y1V7Pz
 ```
 
-Windows 默认用系统自带的 **Edge** 登录 Google；想用 Chrome 就 `bili2nb setup --browser chrome`。工作目录默认是 `%APPDATA%\Bili2NotebookLM`。
+三个系统的登录方式一致：默认使用 Playwright 管理的 **Chromium**，**不需要**预先装 Chrome 或 Edge（首次登录会下载约 170 MB，只下载一次）。想用已装的浏览器就 `bili2nb setup --browser chrome`（或 `msedge`）。工作目录默认是 `%APPDATA%\Bili2NotebookLM`。
 
 ### macOS（终端）
 
@@ -61,7 +61,7 @@ bili2nb setup
 bili2nb BV1VV4y1V7Pz
 ```
 
-macOS 默认用 **Chrome** 登录；没有 Chrome 就 `bili2nb setup --browser msedge`。工作目录默认是 `~/Library/Application Support/Bili2NotebookLM`。
+登录默认使用 Playwright 管理的 **Chromium**，不需要装 Chrome（首次登录会下载约 170 MB，只下载一次）；想用已装的 Chrome 就 `bili2nb setup --browser chrome`。工作目录默认是 `~/Library/Application Support/Bili2NotebookLM`。
 
 ### Linux（Debian / Ubuntu 为例）
 
@@ -73,7 +73,7 @@ cd Bili2NotebookLM
 uv tool install . --overrides overrides.txt
 uv tool update-shell                                  # 然后重新打开终端
 bili2nb doctor
-bili2nb setup                                         # 登录 Google 需要桌面环境里的 Chrome 或 Edge
+bili2nb setup                                         # 登录 Google 需要图形桌面环境（默认自动下载 Chromium，不需要装 Chrome）
 ```
 
 ### 装好之后
@@ -114,11 +114,34 @@ bili2notebooklm --help
 ```bash
 bili2notebooklm "https://www.bilibili.com/video/BV1VV4y1V7Pz"   # 链接
 bili2notebooklm BV1VV4y1V7Pz                                    # 或只给 BV 号（也支持 av 号）
-bili2notebooklm BV1VV4y1V7Pz?p=3                                # 分 P
+bili2notebooklm BV1VV4y1V7Pz?p=3                                # 只处理第 3 个分 P（也可 --part 3）
 bili2notebooklm --json --keep-files BV1VV4y1V7Pz                # 选项放前面也行
 ```
 
 直接跟链接/BV 号就等于 `import`：下载音频、生成关键帧 PDF、**新建一个笔记本**、上传、等待 READY，最后打印笔记本链接。同一视频再次执行会直接返回原笔记本，不会重复创建。
+
+### 多 P 视频
+
+```bash
+bili2nb BV1xxxxxxxxx            # 没有指定 P：处理这个视频的全部分 P，只建 1 个笔记本
+bili2nb "BV1xxxxxxxxx?p=3"      # 只处理 P3（链接里的 p 优先于 --part）
+bili2nb BV1xxxxxxxxx --part 3   # 同上
+bili2nb BV1xxxxxxxxx --audio-only   # 每个分 P 只上传音频
+```
+
+- 一个 3 P 的视频会得到 1 个笔记本、6 个来源：`P01｜第一集｜音频`、`P01｜第一集｜关键帧PDF`、`P02｜…`。某个分 P 没有有效画面时，只上传它的音频并给出提示。
+- **先全部转换，再建笔记本**：所有分 P 都在本地转换、校验完、上传计划确认可行之后，才会在 NotebookLM 里创建笔记本。某个分 P 下载失败时云端什么都不会创建，已完成的分 P 下次直接复用（`bili2nb retry <job_id>`）。
+- 中断（Ctrl+C）或上传中途失败后 `retry` 只继续没完成的来源，不会重复建笔记本、不会重传已成功的来源。
+- 无法确定总分 P 数（B 站接口不可用）时，不会悄悄只处理 P1，而是报错并提示用 `--part N` 指定。
+- 每个分 P 的产物独立保存在 `<输出目录>/<BV号>/P01_标题/`，顶层 `manifest.json` 记录全部分 P 的状态；`--force-new` 只会新建一个笔记本。
+
+### 笔记本来源数量限制
+
+NotebookLM 每个笔记本有来源数量上限（免费账号目前是 50 个，付费等级更高）、单文件上限 200 MB。工具从你的账号**读取实际上限**（读不到时按 50 保守处理，并给出提示），然后：
+
+1. 放得下：每个分 P 各传音频和 PDF。
+2. 放不下：把**连续**的分 P 合并成尽量少的来源（音频、PDF 各自合并，单个合并文件 ≤ 190 MB），如 `P01-P05｜音频`、`P06-P10｜音频`。合并 PDF 带每个分 P 的书签，开头有目录页，列出各分 P 在合并音频里的起始时间。逐 P 的原文件仍保留在本地。
+3. 合并后仍超限：**在创建笔记本之前**报错（退出码 27），写明需要多少来源、上限是多少，建议用 `--part N` 缩小范围。**绝不会**自动拆成多个笔记本。
 
 ### 第一次使用：设置工作目录和 Google 登录
 
@@ -129,6 +152,12 @@ bili2notebooklm --json --keep-files BV1VV4y1V7Pz                # 选项放前�
    - Windows 默认：`%APPDATA%\Bili2NotebookLM`
    - 想改位置：再运行 `bili2notebooklm setup`，或直接 `bili2notebooklm setup --work-dir D:\bili2nb`；也可用环境变量 `BILI2NB_HOME`（优先级最高）。
 2. **Google 登录**：弹出浏览器，你自己登录 Google；工具只保存登录状态，不经过本工具、不进日志。之后无需重复登录（登录失效时会再提示）。不需要手工复制 Cookie，B 站公开视频也不需要 B 站 Cookie。
+   - 默认浏览器是 Playwright 管理的 **Chromium**（三个系统一致），不需要预装 Chrome 或 Edge。**首次登录会先下载约 170 MB 的浏览器组件**（显示进度，只下载一次，存放在 Playwright 的用户级缓存目录，不会改动你已有的 Chrome / Edge / Safari 及其设置）。
+   - 想用已装的浏览器：`bili2nb auth login --browser chrome`（或 `msedge`）。
+   - **下载失败**（网络或代理问题）：直接重新运行 `bili2nb auth login` 即可重试；需要代理时先设置 `HTTPS_PROXY`；或改用 `--browser chrome|msedge`。
+   - **浏览器没能启动 / 没在 5 分钟内登录完**：同样重新运行 `bili2nb auth login`；交互终端里，Chromium 失败且检测到本机有 Chrome 或 Edge 时，会询问是否改用它重试。
+   - Linux 需要图形桌面环境；无桌面的服务器请在有桌面的机器上登录一次。
+   - 暂不支持读取你已有浏览器里的 Google 登录状态（`--browser-cookies`）：它会读取浏览器里的全部 Google Cookie，隐私面更大，且各平台的 Cookie 加密/权限问题较多，见 [V1.2 设计](docs/V1.2_DESIGN.md)。
 
 非终端环境（脚本/`--json`）不会弹任何提问，缺登录时返回错误码 `AUTH_REQUIRED`。
 
@@ -138,7 +167,7 @@ bili2notebooklm --json --keep-files BV1VV4y1V7Pz                # 选项放前�
 bili2notebooklm convert BV1VV4y1V7Pz --output ./out      # 产物：audio.m4a、keyframes.pdf、manifest.json
 ```
 
-其他选项：`--part N`、`--frames auto|slides|scene|none`、`--audio-only`、`--keep-files`、`--force-new`（为同一视频另建笔记本）。
+`convert` 与 `import` 一样：没指定 P 就处理全部分 P（每个分 P 一个子目录）。其他选项：`--part N`、`--frames auto|slides|scene|none`、`--audio-only`、`--keep-files`、`--force-new`（为同一视频另建一个笔记本）。
 
 > Windows 说明：默认目录、ffmpeg 提示和登录流程已按 Windows 适配，但本项目目前只在 macOS 上做过真实验证；Windows 上若遇到问题请反馈。
 

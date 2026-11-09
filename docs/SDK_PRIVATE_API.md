@@ -49,3 +49,7 @@
 3. SDK 异常自带的 `source_id`。
 
 READY/PROCESSING 的来源永远不删；删不掉的 ID 会记入任务记录，下次重试再清理。涉及的回归测试见 `tests/unit/test_v11_hardening.py`。
+
+## V1.2 新增：只使用公共接口的部分
+
+多 P 的来源额度规划使用 SDK **公共** API `client.settings.get_account_limits()`（读取 `AccountLimits.source_limit`，只读）。它**不属于**上面的私有接口清单；读取失败（网络错误、返回空值）时回退到保守默认值 50，并在任务 JSON 的 `upload_plan.limit_origin` 里标为 `default`。登录方面只使用 SDK 命令行 `notebooklm login --browser chromium|chrome|msedge`，没有使用 `--browser-cookies`。
