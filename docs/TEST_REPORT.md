@@ -24,7 +24,7 @@
 
 ---
 
-## V1.2 验证记录（本地分支 `v1.2`，2026-11-09；尚未推送、尚未跑 CI）
+## V1.2 验证记录（分支 `v1.2`，草稿 PR #1，2026-11-09；未合并 main）
 
 | 项目 | 结论 | 证据 |
 |---|---|---|
@@ -38,7 +38,7 @@
 | 来源额度规划（逐 P / 合并 / 分组 / 不可行） | PASS（离线） | `tests/unit/test_planner.py`；真实 30 P 数据在额度 50 → 逐 P 30 个来源，额度 20 或 1 → 合并为 1 个来源 |
 | 多 P 导入引擎（1 个笔记本、重复导入复用、`--force-new`、P2 下载失败、P2 上传失败、Ctrl+C 恢复、超额合并、不可行在建本前失败、计划冻结、分 P 变化） | PASS（**仅 Mock NotebookLM**） | `tests/unit/test_multi_import.py`（25 项） |
 | 旧版（V1.0 / V1.1）任务库迁移与兼容 | PASS（离线） | `tests/unit/test_db_migration.py`；V1.1 的全部导入测试未改动即通过 |
-| GitHub Actions（含新增的三平台 Chromium 安装/启动任务） | **未运行**（分支未推送） | 待推送后填写 |
+| GitHub Actions（含新增的三平台 Chromium 安装/启动任务） | PASS（14/14，草稿 PR #1，提交 `f544b8f`，运行 42663338976） | 5 个 `test`（Ubuntu 3.11/3.12、Windows 3.11/3.12、macOS 3.12）、4 个 `tool install`、README 逐字执行、负向对照，以及新增的 3 个 `bundled Chromium`：Ubuntu（xvfb 虚拟显示）、macOS、Windows 均输出 `OK: bundled Chromium 156.0.8078.4 launched`。注意：runner 自带 Chrome/Edge，这只证明捆绑 Chromium 可经本工具的安装路径装上并启动，**不**证明干净机器可登录 |
 | **真实 NotebookLM 多 P 导入**（读取真实 `source_limit`、真实来源命名与 READY） | **BLOCKED**（需要用户授权） | 目前只有 Mock 证据，**不能**视为真实验收 |
 | Windows / Linux 真实登录与导入；无 Chrome/Edge 的干净机器 | **BLOCKED** | 未验证 |
 
