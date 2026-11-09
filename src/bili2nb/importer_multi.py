@@ -11,6 +11,8 @@ The plan is FROZEN once it exists: a quota change between runs cannot shift sour
 
 from __future__ import annotations
 
+import os
+import shutil
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -46,8 +48,11 @@ class MultiPartMixin:
                 )
             if existing.status == COMPLETED:
                 if self._notebook_alive(existing):
-                    self.log(f"该视频的全部分 P 已导入过（任务 {existing.job_id}），返回原笔记本，不重复创建。")
-                    return self.result(existing, reused=True)
+                    gaps = self._cloud_gaps(existing)
+                    if not gaps:
+                        self.log(f"该视频的全部分 P 已导入过（任务 {existing.job_id}），返回原笔记本，不重复创建。")
+                        return self.result(existing, reused=True)
+                    return self._execute(self._reopen_gaps(existing, gaps), None)
                 self.log("原笔记本已不存在（可能被删除），将创建新任务。")
                 self.store.supersede(existing.job_id)
             else:
@@ -73,6 +78,33 @@ class MultiPartMixin:
             job = self._add_warning(job, warn)
         self.log(f"新建任务 {job.job_id}（{len(infos)} 个分 P，来源上限 {limit}）")
         return self._execute(job, None)
+
+    def _cloud_gaps(self, job: Job) -> list[tuple[dict, bool]]:
+        """Read-only: recorded sources the cloud does not really hold (missing, or ERROR).
+        Returns (plan item, still_in_cloud). A job polluted by the 2026-11-10 file-name bug says
+        'completed' while the notebook lacks sources; never report that as a finished import."""
+        have = {s.id: s for s in self._backoff(
+            lambda: self.adapter.list_sources(job.notebook_id), "verify sources")}
+        gaps = []
+        for it in (job.plan or {}).get("items", []):
+            sid = it.get("source_id")
+            if not sid or sid not in have:
+                gaps.append((it, False))
+            elif have[sid].status == "ERROR":
+                gaps.append((it, True))
+        return gaps
+
+    def _reopen_gaps(self, job: Job, gaps: list[tuple[dict, bool]]) -> Job:
+        plan = dict(job.plan)
+        orphans = set(job.orphans)
+        for it, in_cloud in gaps:
+            self.log(f"云端缺少或损坏：{it['title']}，将重新上传（其余来源不动）。")
+            if in_cloud and it.get("source_id"):
+                orphans.add(it["source_id"])  # our own failed upload: safe to clean before re-upload
+            it["source_id"], it["ready"] = None, False
+        return self.store.update(
+            job.job_id, plan=plan, sources=self._mirror(plan, "source_id"),
+            ready=self._mirror(plan, "ready"), orphans=sorted(orphans))
 
     @staticmethod
     def _part_state(info: dl.VideoInfo) -> dict:
@@ -230,17 +262,23 @@ class MultiPartMixin:
             if it["source_id"]:
                 self.log(f"  {it['title']} 已上传（{it['source_id']}），跳过。")
                 continue
+            if not it["merge"]:  # local files may have been cleaned and re-created: use the part's path
+                part = next(p for p in job.parts if p["part"] == it["parts"][0])
+                it["path"] = (part.get("audio_path") if it["kind"] == "audio" else part.get("pdf_path")) or it["path"]
             path = Path(it["path"]) if it["path"] else None
             if path is None or not path.is_file():
                 raise Bili2nbError("MEDIA_ERROR", f"待上传文件不存在: {it['key']}。请重新运行 retry。")
             self.log(f"阶段 3/4：上传 {it['title']}（{path.stat().st_size / 1e6:.1f} MB）")
             taken = tuple(o["source_id"] for o in plan["items"] if o is not it and o["source_id"])
+            staged = self._stage_unique_name(path, it) if not it["merge"] else None
             try:
                 sid = self._backoff(
-                    lambda path=path, title=it["title"], owned=tuple(job.orphans), taken=taken:
+                    lambda path=staged or path, title=it["title"], owned=tuple(job.orphans), taken=taken:
                         self.adapter.upload_file(nb, path, title=title, owned=owned, taken=taken),
                     f"upload {it['key']}")
             finally:
+                if staged is not None:
+                    staged.unlink(missing_ok=True)
                 job = self._record_orphans(job)
             if sid in taken:  # never record one cloud source for two items (live bug 2026-11-10)
                 raise Bili2nbError(
@@ -274,6 +312,22 @@ class MultiPartMixin:
                 job = self._add_warning(
                     job, f"来源《{it['title']}》的标题未能设置，云端暂显示为文件名（内容不受影响）。")
         return job
+
+    @staticmethod
+    def _stage_unique_name(path: Path, it: dict) -> Path | None:
+        """Every part's file is called audio.m4a / keyframes.pdf; NotebookLM shows (and the
+        adapter matches) that FILE name whenever the title rename does not stick. Upload a
+        same-directory hard link (copy if links are unsupported) named P02_audio.m4a instead."""
+        staged = path.with_name(f"P{it['parts'][0]:02d}_{path.name}")
+        staged.unlink(missing_ok=True)
+        try:
+            os.link(path, staged)
+        except OSError:
+            try:
+                shutil.copy2(path, staged)
+            except OSError:
+                return None  # fall back to the original name; `taken` still protects correctness
+        return staged
 
     def _m_ready(self, job: Job) -> Job:
         t0 = time.monotonic()

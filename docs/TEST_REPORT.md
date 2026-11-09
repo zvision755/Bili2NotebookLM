@@ -28,7 +28,7 @@
 
 | 项目 | 结论 | 证据 |
 |---|---|---|
-| 离线测试 | PASS（467 项） | `uv run pytest -q tests/unit`；Ruff 干净 |
+| 离线测试 | PASS（478 项） | `uv run pytest -q tests/unit`；Ruff 干净 |
 | 登录默认 Chromium（三平台一致、显式 chrome/msedge 透传、失败分类、回退只在交互时询问） | PASS（离线） | `tests/unit/test_login.py`（Mock 子进程，不启动浏览器、不访问 Google） |
 | 本机捆绑 Chromium 可启动 | PASS（仅 macOS 27 / arm64） | Chromium 156.0.8078.4，有窗口与无头模式均启动并渲染本地页面；未访问任何网站 |
 | Playwright 自带下载器在本机网络下失败 | 已记录（真实现象） | `playwright install chromium` 反复在 0% 报 "server closed connection"，curl 可下载同一文件；错误提示已覆盖重试/代理/改用 chrome 或 msedge |
@@ -39,8 +39,26 @@
 | 多 P 导入引擎（1 个笔记本、重复导入复用、`--force-new`、P2 下载失败、P2 上传失败、Ctrl+C 恢复、超额合并、不可行在建本前失败、计划冻结、分 P 变化） | PASS（**仅 Mock NotebookLM**） | `tests/unit/test_multi_import.py`（25 项） |
 | 旧版（V1.0 / V1.1）任务库迁移与兼容 | PASS（离线） | `tests/unit/test_db_migration.py`；V1.1 的全部导入测试未改动即通过 |
 | GitHub Actions（含新增的三平台 Chromium 安装/启动任务） | PASS（14/14，草稿 PR #1，提交 `f544b8f`，运行 42663338976） | 5 个 `test`（Ubuntu 3.11/3.12、Windows 3.11/3.12、macOS 3.12）、4 个 `tool install`、README 逐字执行、负向对照，以及新增的 3 个 `bundled Chromium`：Ubuntu（xvfb 虚拟显示）、macOS、Windows 均输出 `OK: bundled Chromium 156.0.8078.4 launched`。注意：runner 自带 Chrome/Edge，这只证明捆绑 Chromium 可经本工具的安装路径装上并启动，**不**证明干净机器可登录 |
-| **真实 NotebookLM 多 P 导入**（读取真实 `source_limit`、真实来源命名与 READY） | **BLOCKED**（需要用户授权） | 目前只有 Mock 证据，**不能**视为真实验收 |
+| **真实 NotebookLM 多 P 导入**（读取真实 `source_limit`、真实来源命名与 READY） | **FAIL → 已修复，复验未通过（V-2 尚未 PASS）** | 2026-11-10 两次真实运行，见下方“V-2 真实多 P 导入记录”。首次运行暴露严重缺陷（已修复）；复验时 NotebookLM 把一个几乎无语音的分 P 音频处理为 ERROR，工具如实报失败。尚待用一个信息量大、有语音的 2–3 P 视频重新验证 |
 | Windows / Linux 真实登录与导入；无 Chrome/Edge 的干净机器 | **BLOCKED** | 未验证 |
+
+### V-2 真实多 P 导入记录（2026-11-10，用户逐次授权；真实 ID 不入库）
+
+测试视频：`BV1nqZqYxEzH`（公开，2 个分 P：642 s + 107 s）。本地 `convert` 演练 PASS（每个分 P 一个子目录、manifest 正确、音频时长 641.7 s / 106.3 s 与元数据一致）。账号来源上限：**`source_limit` = 300，`limit_origin` = `server`**（真实读到），计划 `per_part`、4 个来源。
+
+| 步骤 | 结论 | 证据 |
+|---|---|---|
+| 首次真实导入 `bili2nb BV1nqZqYxEzH --json` | **FAIL（严重缺陷）** | 笔记本数 28→29（恰好 +1）；任务返回 `completed`、`source_count: 4`、4 个 READY，但**云端只有 2 个来源**（P01 的音频与 PDF），且标题仍是 `audio.m4a` / `keyframes.pdf`。P02 的两次上传根本没有发生，其 `source_id` 与 P01 相同 |
+| 根因 | 已定位 | 多 P 每个分 P 的文件同名（`audio.m4a` / `keyframes.pdf`）；SDK 的来源标题重命名是“尽力而为”、在真实环境常不生效（账号里更早的单 P 笔记本同样如此）；`upload_file` 的“同文件名已存在则复用”把 P02 当成了 P01 已上传的来源。Mock 的多 P adapter 自带 `upload_file`、绕过了这段逻辑，所以离线测试看不出 |
+| 修复（先写失败测试） | PASS（离线） | `tests/unit/test_v12_live_regressions.py`：用**真实 `NotebookAdapter` + 仿线上行为的假 SDK 客户端**（标题保持文件名）复现。修复：① 其他条目已占用的来源 ID 不再被复用（`taken`）；② 导入器拒绝把同一云端来源记给两个条目；③ READY 后列出云端核对记录的来源是否都在、缺失则失败并清除记录供 retry，并补做标题重命名（改不成只给警告）；④ 复用路径（已 completed 的任务）也只读核对云端，缺口自愈续传、不再误报 `reused`；⑤ 上传时用同目录硬链接（不支持则复制）给每个分 P 的文件唯一名（`P02_audio.m4a`），上传后删除 |
+| 复验真实导入 `bili2nb BV1nqZqYxEzH --force-new --json` | **FAIL（工具如实报失败）** | 笔记本数 29→30（+1）。这次 4 个来源**都真实上传**（4 个不同 `source_id`，P02 不再被吞），标题除 P01 音频外均已生效；但 NotebookLM 把 **P02 音频**处理为 `ERROR`，任务返回 `failed / SOURCE_NOT_READY` 并提示 `retry`。未对该任务重试 |
+| P02 音频 ERROR 的诊断（只读） | 结论：**倾向 NotebookLM 对几乎无语音内容的处理失败，而非我们的上传；未做重传，故未 100% 证实** | 本地 P01/P02 音频格式一致（AAC-LC 44.1 kHz 双声道、分片 MP4、`moov` 在前、文件完整）；P02 仅 1.76 MB，小于 2 MiB 分块，是单块上传，无“分块不完整”可能；云端 ERROR 来源无 `word_count`/mime，创建后约 13 s 失败；同视频 P01 音频 READY，但 `word_count` 仅 134（10 分 42 秒），说明这个视频几乎没有可转写的语音 |
+| 幂等重跑（同一命令再跑） | **未做** | 复验未成功，无完整任务可复用；旧的被污染任务已由新逻辑（复用前核对云端）覆盖，单元测试验证其会续传而不是 `reused` |
+| 用户在网页里核对来源与提问 | **未做** | 待换用信息量大的视频后再做 |
+
+账号里因此留下 **2 个测试笔记本**（标题 `B站｜哥哥变成企鹅了怎么办？`；一个缺 P02，一个的 P02 音频为 ERROR），由用户自行删除；本验证未删除任何云端内容。
+
+**结论**：V-2 目前**不能标 PASS**。已验证的真实事实：账号 `source_limit` 真实读到（300/server）；修复后多 P 来源确实逐个上传并获得不同 ID；工具在 NotebookLM 拒绝一个来源时如实失败。待验证：换用有大量语音、画面为幻灯片/代码的 2–3 P 视频，做到 1 个笔记本、全部来源 READY、标题为 `P01｜…｜音频` 形式、幂等重跑 `reused: true`。
 
 ## 历史验证记录（按时间顺序）
 

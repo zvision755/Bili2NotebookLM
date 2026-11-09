@@ -45,6 +45,10 @@ class MultiNLM(FakeNotebookLM):
             raise self.limit_error
         return self.limit, self.limit_origin
 
+    def list_sources(self, nb):
+        from bili2nb.notebook.adapter import SourceInfo
+        return [SourceInfo(i, None, st) for i, st in self.notebooks[nb].items()]
+
     def finalize_sources(self, nb, titles):
         return sorted(i for i in titles if i not in self.notebooks[nb]), []
 

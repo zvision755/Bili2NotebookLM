@@ -185,3 +185,41 @@ def test_ready_stage_fails_when_a_recorded_source_is_not_in_the_cloud(tmp_path, 
     with pytest.raises(Bili2nbError) as ei:
         env.run()
     assert ei.value.code == "UPLOAD_FAILED" and "找不到" in ei.value.message
+
+
+# ------------------------------------------------------------------ reuse must verify the cloud
+def test_completed_job_with_a_source_missing_in_the_cloud_is_not_reused_but_resumed(tmp_path, monkeypatch):
+    """A job polluted by the file-name bug (completed, but the cloud lacks sources) self-heals."""
+    monkeypatch.setenv("BILI2NB_HOME", str(tmp_path / "home"))
+    env = Env(tmp_path, n=2)
+    first = env.run()
+    lost = first["source_ids"]["P02:audio"]
+    del env.nlm.notebooks["nb-1"][lost]  # the cloud does not have it
+    uploads_before = len(env.nlm.titles)
+    again = env.run()
+    assert again["reused"] is False and again["status"] == COMPLETED
+    assert again["job_id"] == first["job_id"] and env.nlm.create_calls == 1  # same notebook, no new one
+    assert env.nlm.titles[uploads_before:] == ["P02｜第2集｜音频"]  # only the missing one re-uploaded
+    assert len(env.nlm.notebooks["nb-1"]) == 4 and again["source_ids"]["P02:audio"] != lost
+
+
+def test_completed_job_whose_sources_are_all_in_the_cloud_is_still_reused(tmp_path, monkeypatch):
+    monkeypatch.setenv("BILI2NB_HOME", str(tmp_path / "home"))
+    env = Env(tmp_path, n=2)
+    env.run()
+    n = len(env.nlm.titles)
+    again = env.run()
+    assert again["reused"] is True and len(env.nlm.titles) == n
+
+
+# ------------------------------------------------------------------ unique upload file names
+def test_each_part_uploads_a_file_with_a_unique_name_and_staging_is_cleaned(tmp_path, monkeypatch):
+    env = live_env(tmp_path, monkeypatch, n=2)
+    res = env.run()
+    names = [n for n, _ in env.sources.add_calls]
+    assert sorted(names) == ["P01_audio.m4a", "P01_keyframes.pdf", "P02_audio.m4a", "P02_keyframes.pdf"]
+    assert res["source_count"] == 4
+    leftovers = [p.name for p in (tmp_path / "out").rglob("*") if p.name.startswith("P0") and p.is_file()
+                 and p.name in names]
+    assert leftovers == []  # staged links removed; the original audio.m4a files stay untouched
+    assert len(list((tmp_path / "out").rglob("audio.m4a"))) == 2
