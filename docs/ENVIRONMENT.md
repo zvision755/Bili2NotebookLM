@@ -1,12 +1,12 @@
-# ENVIRONMENT（Gate 0 / Gate 1 记录）
+# ENVIRONMENT（环境与依赖记录）
 
-> 采集日期：2026-11-08。全部为只读检查，未改动系统代理、DNS、现有项目；未登录 Google。
+> 首次采集：2026-11-08（Gate 0 / Gate 1，开发机为 Apple Silicon macOS，全部为只读检查）。后续补充见各节日期。跨平台验证以 GitHub Actions 为准（macOS / Windows / Linux）。
 
 ## 1. 宿主环境（只读检查结果）
 
 | 项目 | 结果 |
 |---|---|
-| 架构 / OS | arm64（Apple Silicon）/ macOS 27.0.1 (build 26A434) |
+| 架构 / OS | arm64（Apple Silicon）/ macOS（开发机） |
 | 系统 Python | `/opt/homebrew/bin/python3` = 3.15.2（过新，不用于项目） |
 | 项目 Python | uv 管理的 CPython **3.12.15**（`.venv`，`requires-python >=3.11`） |
 | uv | 0.13.7（`/opt/homebrew/bin/uv`） |
@@ -14,10 +14,10 @@
 | ffmpeg / ffprobe | 9.0.2（`/opt/homebrew/bin/`），Homebrew 安装，未重复安装 |
 | Git | 2.56.0；项目目录原本不是 git 仓库，已在项目目录内 `git init` |
 | Homebrew | 7.0.12 |
-| 磁盘 | `~/Projects` 所在卷 926 GiB，可用 132 GiB（86% 已用） |
-| 系统/环境代理 | 无（HTTP/HTTPS/SOCKS/PAC 均未启用，无 `*_proxy` 环境变量）；未做任何修改 |
+| 磁盘 | 开发机剩余空间充足（长视频处理通常需要数 GB 临时空间；`doctor` 在剩余 <5 GB 时告警） |
+| 网络代理 | 开发机未启用系统代理；工具不读取也不修改任何网络/代理设置 |
 | 连通性（HEAD，15s 超时） | bilibili.com 200（0.74s）；b23.tv 404（根路径无内容，域名可达）；notebooklm.google.com 301；accounts.google.com 302；pypi.org 200；DNS 均 <10ms |
-| 副作用说明 | 运行 `notebooklm doctor` 创建了空目录 `~/.notebooklm`（0700），其下尚无任何凭证文件 |
+| 副作用说明 | 运行 `notebooklm doctor` 会创建空目录 `~/.notebooklm`（0700），登录前其下没有凭证文件 |
 
 ## 2. 项目依赖（`uv.lock` 锁定）
 

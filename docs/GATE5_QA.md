@@ -1,4 +1,4 @@
-# Gate 5 网页问答测试题（给用户在 NotebookLM 里提问）
+# Gate 5 网页问答测试题（在 NotebookLM 网页版里提问）
 
 怎么用：打开对应笔记本，把「问题」原样粘贴到对话框，对照「参考答案」。
 - 【画面题】答案只在关键帧 PDF 的画面里（屏幕/幻灯片上的字或图），用来验证视觉来源。
@@ -9,7 +9,7 @@
 ---
 
 ## A. 6 分钟 Excel 教程（IMAGE 函数）
-https://notebooklm.google.com/notebook/<notebook-id>
+（用你自己导入该视频后得到的笔记本链接）
 
 | # | 类型 | 问题 | 参考答案（核对点） |
 |---|---|---|---|
@@ -25,7 +25,7 @@ https://notebooklm.google.com/notebook/<notebook-id>
 ---
 
 ## B. 38 分钟 PPT 讲座（王德峰《大学》讲读 · 第 2 讲：朱熹《大学章句序》）
-https://notebooklm.google.com/notebook/<notebook-id>
+（用你自己导入该视频后得到的笔记本链接）
 
 | # | 类型 | 问题 | 参考答案（核对点） |
 |---|---|---|---|
@@ -40,7 +40,5 @@ https://notebooklm.google.com/notebook/<notebook-id>
 
 ---
 
-## 额外建议（验收 Gate 5 条件 2/3）
-1. 做完后在**手机** NotebookLM 刷新同一个笔记本，再随便问 1 题（如 A3 或 B3），确认手机端也能问答。
-2. 记下"从命令结束到手机上能看到笔记本"大约多久（不设 SLA，只记实测）。
-3. 任何一题回答错误时，请把题号、NotebookLM 的回答截图发给我，我分析是转换问题还是 NotebookLM 自身的限制。
+## 额外建议
+1. 任何一题回答错误时，请记录题号和 NotebookLM 的回答截图，用于判断问题出在转换环节还是 NotebookLM 自身的限制。

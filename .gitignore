@@ -1,36 +1,65 @@
-# secrets / credentials / sessions
+# ---- secrets / credentials / login sessions (NEVER commit) ----
 .env
 .env.*
 *credentials*
-storage_state*
+*client_secret*
+*storage_state*
 *cookies*
+*cookie*.txt
+*token*
+*secret*
+auth*.json
 *.pem
 *.key
+.netrc
 /.notebooklm/
-# runtime state & media
+browser_profile/
+.playwright/
+
+# ---- local runtime data: job db (+ SQLite sidecars), work dir, outputs, logs, caches ----
 *.sqlite
+*.sqlite-*
 *.sqlite3
+*.sqlite3-*
 *.db
+*.db-*
 /job-state/
 /jobs/*.json
 /media/
 /cache/
+/work/
 /tmp/
 /output/
 /out/
 *.log
 /logs/
+*.tmp
+*.old-*
+
+# ---- media / documents produced by convert ----
 *.m4a
+*.m4b
 *.mp3
 *.opus
+*.aac
+*.ogg
+*.flac
+*.wav
 *.mp4
+*.m4v
 *.mkv
 *.webm
 *.flv
-*.wav
+*.mov
+*.avi
+*.ts
 *.pdf
 !tests/fixtures/*.pdf
-# python
+frame_*.jpg
+frame_*.png
+/frames/
+
+# ---- python / tooling ----
 .venv/
 __pycache__/
 *.egg-info/

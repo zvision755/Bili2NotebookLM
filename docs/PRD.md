@@ -1,9 +1,8 @@
 # Bili2NotebookLM — V1 产品需求与技术实现规范
 
 > 状态：开发需求定稿（2026-11-08）
-> 目标宿主：Mac（Apple Silicon，macOS），由 Claude Code 开发
-> 项目目录：~/Projects/Bili2NotebookLM
-> 文档适用范围：仅 V1 本地 CLI，不含 QQ Bot、Hermes、DSH、Cloudflare Tunnel、Web UI、Obsidian 插件
+> 首个验证宿主：macOS（Apple Silicon）；V1.1 起 CI 同时覆盖 Windows 与 Linux
+> 文档适用范围：仅 V1 本地 CLI，不含聊天机器人、远程网关、Web UI、笔记软件插件
 
 ## 0. 最高优先级目标
 
@@ -18,7 +17,7 @@
 
 ## 1. 非目标与开发边界（V1 坚决不做）
 
-- 不开发 QQ Bot、Hermes、DSH-IM、Cloudflare Tunnel、公网 API、后台常驻服务、Web GUI、Chrome 插件、Obsidian 插件。
+- 不开发聊天机器人、远程网关、公网 API、后台常驻服务、Web GUI、浏览器插件、笔记软件插件。
 - 不开发本地 Whisper/ASR、模型总结、RAG、向量数据库、VLM、OCR 工作流；NotebookLM 承担转录、总结、对话、学习资料生成。
 - 不自行逆向 Google 的私有协议；优先复用 notebooklm-py 的公开 Python SDK / CLI。它是非官方接口，必须封装隔离，不承诺永不失效。
 - 不实现绕过 DRM、付费权限、验证码或平台访问控制。只处理用户有权访问与处理的视频。
@@ -104,7 +103,7 @@
 - 明确区分“HTTP 请求接受/已入库/转录及索引完成”。轮询至 SDK 可判断的 READY 状态，超时后保留任务与 Notebook ID 以便 resume。
 - 已成功的 source 不能因另一文件失败而重复上传；重试应先查询 Notebook 中是否存在对应来源，避免重复来源。
 - 发生 SDK 限流、认证过期、Google 接口变化时返回可追踪错误，不无限重试，支持固定上限+退避策略。
-- 最终 URL 使用 SDK 返回或验证过的 Notebook ID 构造，在本机浏览器中可以打开；只标记 ready 不保证手机端立刻刷新。
+- 最终 URL 使用 SDK 返回或验证过的 Notebook ID 构造，在本机浏览器中可以打开；手机端同步由 Google 负责，不作为验收条件。
 - 一个视频默认创建一个新笔记本；首版不实现自动合并到现有本子（可在后续版本添加）。
 - 来源不会自动分享到他人；只使用用户本人授权账号。
 
@@ -140,7 +139,7 @@
 
 ## 7. 建议源码与本地运行数据位置
 项目源码：
-  ~/Projects/Bili2NotebookLM/
+  Bili2NotebookLM/
     docs/PRD.md
     CLAUDE.md
     pyproject.toml
@@ -153,8 +152,8 @@
     README.md
     .gitignore
 
-运行时数据：优先遵循 macOS 用户数据目录规范（如 ~/Library/Application Support/Bili2NotebookLM），或自定义 ~/.local/share/bili2nb；媒体缓存不要混入 Agent-Memory/Obsidian Vault，也不要写入任何研究结果目录。用户指定 --output 时仅输出成品音频/PDF及不含认证秘密的 manifest。
-不会由此对 Windows、NAS、路由器或代理策略做任何修改。
+运行时数据：优先遵循 macOS 用户数据目录规范（如 ~/Library/Application Support/Bili2NotebookLM），或自定义 ~/.local/share/bili2nb；媒体缓存不要写入笔记库或其他项目目录。用户指定 --output 时仅输出成品音频/PDF及不含认证秘密的 manifest。
+不会由此对系统网络、代理等设置做任何修改。
 
 ## 8. 质量验收与测试矩阵
 
@@ -164,7 +163,7 @@ P0 — NotebookLM API 可用性（正式开发前验证）：
 1. 确认用户本机真实 NotebookLM 登录可用，或引导用户一次性本机登录。
 2. 使用极小且非敏感的测试 M4A/MP3 和 1 页 PDF 创建临时测试笔记本；只有用户明确同意实际创建/上传后才执行。
 3. 检验笔记本创建、两个来源上传、轮询 READY、笔记本 URL；真实 API 发生变化时先调整适配层。
-4. 用户确认手机 NotebookLM 可见；如 API 不可用须明确阻塞，而非伪造模拟通过。
+4. 在 NotebookLM 网页版确认笔记本与来源可见、可问答；如 API 不可用须明确阻塞，而非伪造模拟通过。
 
 P1 — 转换模块：
 1. 用短视频、30–60 分钟 PPT 讲座、软件操作演示、纯口播分别测试。
@@ -179,7 +178,7 @@ P2 — 两种 CLI 模式：
 3. 缺失 Cookie、过期 Cookie、上传中断、某来源失败能恢复，不产生重复笔记本或来源。
 4. --json 输出格式一致，退出码准确，stdout 不混入进度条或登录秘密。
 5. 使用该视频的实际内容在 NotebookLM 提问确认音频转录可用、至少一张 PDF 画面被引用/理解；记录局限，不声称自动时间轴对齐。
-6. 最后在手机 NotebookLM 同账号验证新笔记本可见（可能需要等待同步/下拉刷新）。
+6. 最后在 NotebookLM 网页版验证新笔记本可见并能问答（V1.1 起不再要求手机端）。
 7. benchmark 给出视频时长、下载字节、音频/PDF体积、每阶段耗时及总耗时，不保证所有视频几分钟完成。
 
 自动化测试策略：
@@ -194,7 +193,7 @@ P2 — 两种 CLI 模式：
 阶段 2：实现 MVP convert：解析单条 B站 URL，只下音频 + 简单场景/定时抽样 PDF；PDF 生成、缓存和可复现处理过程。
 阶段 3：实现 MVP import：NotebookAdapter、保存 ID、失败重试、状态查询、JSON 输出。
 阶段 4：优化选帧算法、音频容器处理、重复/动画检测、退避重试、跨视频验证和 CLI 文档。
-阶段 5：手工手机验证，记录最终验收结果和未解决风险。
+阶段 5：网页版人工验证，记录最终验收结果和未解决风险。
 
 每个阶段都应能运行最小可用例子并有相应测试。优先做出完整“URL→NotebookLM”纵向闭环，再优化视觉算法，不要一开始深陷 PPT 去重算法。
 
@@ -215,5 +214,5 @@ P2 — 两种 CLI 模式：
 - 不需要 GUI、Bot 插件、Obsidian 笔记导出或持续后台任务。
 
 ### V1 最终验收一句话
-在已完成一次本机 NotebookLM 授权的前提下，输入任一已验证可访问的 B站单视频 URL，执行 bili2nb import URL，CLI 自动生成音频与有意义的视觉 PDF、创建 NotebookLM 笔记本、上传两个来源并等待处理状态可用，打印可访问的笔记本 URL；用户在同一 Google 账号的手机 NotebookLM 中能找到该笔记本。
+在已完成一次本机 NotebookLM 授权的前提下，输入任一已验证可访问的 B站单视频 URL，执行 bili2nb import URL，CLI 自动生成音频与有意义的视觉 PDF、创建 NotebookLM 笔记本、上传两个来源并等待处理状态可用，打印可访问的笔记本 URL；用户在 NotebookLM 网页版中能打开该笔记本并对两个来源正常问答。
 

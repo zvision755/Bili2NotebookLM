@@ -1,7 +1,7 @@
 # Bili2NotebookLM V1：阶段验收关卡（Claude Code 必须执行）
 
 > 本文是 docs/PRD.md 第 8–9 节的量化补充；若有冲突，以“安全与真实验收不造假”为前提更新两处文档。
-> 仅本地 macOS CLI。QQ Bot、Hermes、DSH、Cloudflare Tunnel、Obsidian 和 GUI 全部排除 V1。
+> 仅本地命令行（V1 以 macOS 为首个真实验证平台，V1.1 起 CI 覆盖 macOS / Windows / Linux）。聊天机器人、远程网关、笔记软件集成和 GUI 全部排除 V1。
 > 所有外部接口与文件格式必须以实际版本、官方说明和真实测试为准。
 
 ## 通用执行规则：Stage Gate
@@ -22,7 +22,7 @@
 硬性通过条件：
 1. 记录 macOS 架构、Python >=3.11、uv、yt-dlp、ffmpeg、ffprobe、Git、磁盘可用量、DNS/访问 B站与 NotebookLM 的连通性；缺失项明确安装/阻塞状态。
 2. 在隔离虚拟环境中完成项目安装；执行 bili2nb --help 返回 0；bili2nb import --help 和 convert --help 能查看真实支持参数。
-3. 无权限操作、未授权登录、Mac 系统代理调整、现有项目修改或远程网关建设。
+3. 无权限操作、未授权登录、系统网络/代理设置调整、现有项目修改或远程网关建设。
 4. Git 忽略凭证、Cookie、运行日志、音视频、PDF 缓存与 SQLite；审查生成的文件，不能把测试秘密写进 Git。
 5. 本阶段不需要访问真实 Google 账号，不会因为账号未登录而 FAIL。
 
@@ -37,7 +37,7 @@
 1. 用户在本机完成一次交互式 Google 授权后，bili2nb auth check 能实际验证会话；登出/无会话时给 AUTH_REQUIRED，不泄漏敏感字段。
 2. 经用户明确同意后，使用非敏感、已知含可识别语音的短音频及有少量可见文字的一页 PDF：创建一个全新 NotebookLM 笔记本，并取得 notebook_id 和直达 URL。
 3. 音频和 PDF 分别上传，各取得不同的 source_id；轮询处理状态直到两个来源均 READY（或该 SDK 官方定义的等价可用状态）；严禁仅凭上传请求返回 200 即认定成功。
-4. 在 NotebookLM 网页端实际打开该 notebook URL，确认两个来源出现且可用于问答；至少对音频内容问一题、对 PDF 明确文字问一题，并记录结果。手机端可见性留在 Gate 5。
+4. 在 NotebookLM 网页端实际打开该 notebook URL，确认两个来源出现且可用于问答；至少对音频内容问一题、对 PDF 明确文字问一题，并记录结果。手机端不作为验收条件（V1.1 起取消）。
 5. 对失效会话、上传超时分别能给出可诊断错误，避免再次运行时静默重复创建笔记本。
 6. SDK 的当前版本、接口方法/签名、授权配置位置、非官方 API 风险记录到 docs/ENVIRONMENT.md；不复制秘密内容到项目。
 
@@ -97,16 +97,16 @@
 交付：可安装 CLI、README、docs/ENVIRONMENT.md、docs/TEST_REPORT.md、当前已知限制。
 
 硬性通过条件：
-1. 用户使用与日常一致的 Mac 环境，首次手动授权一次后，在已登录的状态下执行 bili2nb import <公开可访问B站URL>。
+1. 用户使用与日常一致的桌面环境（macOS / Windows / Linux），首次手动授权一次后，在已登录的状态下执行 bili2nb import <公开可访问B站URL>。
 2. 无任何手动导入/总结/转录步骤，CLI 返回非空且可打开的 NotebookLM URL；两条来源 READY，真实网页 NotebookLM 可对视频语音和至少一个视觉信息点进行准确问答。
-3. 用户在手机 NotebookLM 用同一 Google 账号打开或刷新后，能找到同一个 Notebook ID 与对应来源。手机端同步延时只计实测，不设虚假的即时同步 SLA。
+3. （V1.1 起取消）手机端 NotebookLM 不再是必须验收项：同步由 Google 负责，不在本工具可控范围内。如需自愿验证，仅记录实测，不设同步 SLA，不影响 PASS 判定。
 4. 使用第二条不同的视频再次成功，确认并非单个固定样本特例；第一次测试后重新启动 CLI/终端，无需重复登录（只要 Cookie 仍有效）。
 5. 断开/清除本机认证状态时，convert 依然成功、import 明确报 AUTH_REQUIRED；重新登录后可恢复。
 6. 按 README 从项目目录运行安装、help、auth、convert、import 的示例确实可复现；最终 docs/TEST_REPORT.md 对每一个 Gate 标注 PASS/FAIL/BLOCKED 并保留证据索引。
-7. 用户未授权前不得删除云端测试笔记本；本地 Cookie 不得进入仓库、日志、导出包。
+7. 未经用户授权不得删除云端笔记本或来源；本地 Cookie/登录状态不得进入仓库、日志、导出包。
 
 一票否决：把 mock 当实测、拿上传成功冒充来源 READY、重复创建大量 NotebookLM 笔记本、泄漏 Google Cookie、必须人工上传才能完成。
-最终通过标准：用户确认“我只需在 Mac 输入 B站链接，随后在我的 NotebookLM 里看到新笔记本”，并有实际端到端证据。
+最终通过标准（V1.1 修订）：CLI 自动完成导入（无人工上传/转录），两个来源均 READY，且 NotebookLM **网页版**能对视频语音和至少一个视觉信息点正常问答；并有实际端到端证据。
 
 ## 验收报告填写模板（每阶段复制一份）
 
@@ -117,7 +117,7 @@
 - 输入样本类型、长度、来源授权说明：
 - 自动化测试数量：通过 / 失败 / 跳过
 - 真实外部 API 调用：是否经过用户批准；请求摘要（去敏）
-- 产物路径、Notebook URL/ID（仅在用户私有报告中）、来源 ID 与 READY 状态：
+- 产物路径、来源 ID 与 READY 状态（公开报告中不写真实 Notebook ID/URL，用别名代替）：
 - 截图质量、音频完整度、PDF 大小、阶段耗时：
 - 缺陷与风险、下一步措施：
 - 验收执行人 / 用户确认事项：

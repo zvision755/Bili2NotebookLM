@@ -1,22 +1,30 @@
 # TEST_REPORT
 
-每个 Gate 一节。PASS / FAIL / BLOCKED 仅基于可复现实测证据。
+本报告记录每个 Gate 的验证证据。PASS / FAIL / BLOCKED 仅基于可复现实测证据；mock 测试只证明逻辑，不代表真实 B 站 / NotebookLM 通过。
 
-## 总览（Gate 状态与证据索引，更新于 2026-11-09）
+> **阅读指南**：「当前状态」一节是最新结论；之后的各 Gate 小节**按时间顺序保留完整的验证与故障记录**（含已修复的 BLOCKED / FAIL / 进行中状态和技术分析），其中的状态标签是**当时**的状态。真实笔记本与来源 ID 在公开文档中一律用别名（NB-* 为笔记本，SRC-* 为来源）代替，别名对应的真实笔记本不对外提供。
 
-| Gate | 结果 | 关键证据 |
+## 当前状态（V1.1）
+
+| Gate | 当前结论 | 关键证据 |
 |---|---|---|
-| 0 环境与初始化 | PASS | 本文 Gate 0 节；docs/ENVIRONMENT.md |
-| 1 认证与真实双来源上传 | PASS | Gate 1 节（用户网页问答验证：音频“绿色长颈鹿”、PDF“紫色猫头鹰 7421”）；curl_cffi 传输发现 |
-| 2 convert 本地素材 | PASS | Gate 2 节；`tmp/gate2/`（输出与 PDF） |
-| 3 import 端到端 | PASS（自动化） | Gate 3 节末“最终真实运行记录”：2 来源 READY、幂等复用、笔记本总数不变 |
-| 4 可靠性/视觉/性能 | PASS | Gate 4 节：benchmark、召回 100%/重复 0%、故障注入、长视频+短视频真实 import、重复建本根因与修复验证；pytest 164 passed、ruff 通过 |
-| 5 最终用户验收 | **待用户参与** | 见下方“Gate 5”节；清单待用户确认 |
+| 0 环境与初始化 | PASS | Gate 0 节；ENVIRONMENT.md |
+| 1 认证与真实双来源上传 | PASS | Gate 1 节（网页问答验证：音频与 PDF 中的暗号均被正确回答） |
+| 2 convert 本地素材 | PASS | Gate 2 节 |
+| 3 import 端到端 | PASS | Gate 3 节末“最终真实运行记录”：2 来源 READY、幂等复用、笔记本总数不变 |
+| 4 可靠性 / 视觉 / 性能 | PASS | Gate 4 节：benchmark、召回 14/14、重复 0、故障注入、长/短视频真实 import、重复建本根因与修复验证 |
+| 5 最终验收（V1.1 修订标准） | PASS | Gate 5 节：CLI 自动导入 + 两来源 READY + NotebookLM 网页版问答（16 题全部通过）；手机端不再是必验项 |
 
-自动化测试：`uv run pytest -q` → 164 passed（默认离线）；`uv run ruff check src tests` → All checks passed。
-已创建的真实笔记本（私有报告，勿外传）：Gate 1 测试笔记本、Gate 3 `4e8482dd…`（含 `?p=5` PPT 样本）、Gate 4 `c3b6f6c2…`（38 分钟讲座）、`e404a7e1…`（6 分钟 Excel 教程）；另有 2 个修复前遗留的空重复笔记本 `9159a9e2…`、`e3f768a9…`，**均未删除**，待用户决定。
+**平台验证范围**（见 V1.1_HARDENING.md 的实测记录）：
+- macOS：完整真实验证（真实 Google 登录、真实 NotebookLM 导入、真实 B 站下载）。
+- macOS / Windows / Linux：GitHub Actions 自动运行 Ruff、离线 Pytest、`doctor`、`uv tool install` 全局命令冒烟测试。
+- Windows / Linux：**尚未**做真实 Google 登录与真实 NotebookLM 导入验证。
+
+**自动化测试数量与最新 CI 结果**以 V1.1_HARDENING.md 的最终报告为准（避免多处文档数字不一致）。
 
 ---
+
+## 历史验证记录（按时间顺序）
 
 ## Gate 0 — 环境可用与项目初始化
 
@@ -71,20 +79,20 @@
 |---|---|---|
 | 登录 | 用户在本机终端执行 `bili2nb auth login --browser chrome` | `storage_state.json` 权限 0600，目录 0700，位于 `~/.notebooklm/profiles/default/`（不在项目内） |
 | auth check（真实） | `bili2nb auth check` | **PASS**：`Auth OK (account has 23 notebooks)`，exit 0 |
-| 创建笔记本 | `scripts/gate1_live.py` | **PASS**：notebook_id `6c8257f6…`，耗时 9.5s（含 auth check） |
-| 上传音频 | `sources.add_file(wait=False)` | SDK 报 `NetworkError (upload_finalize): Server disconnected without sending a response`；**但**随后列表显示该来源已存在且 **READY**（source `1b00b6b4…`，word_count 26，READY 耗时 4.3s）。即“服务端已接收、响应被丢”，属 **误报失败** |
-| 诊断重试（我造成） | 为查原因再次 `add_file` 同一音频 | 同样报错且服务端再次接收 → 笔记本内出现**重复**音频来源 `9564ee23…`（READY）。教训：失败后必须先查询来源再重试 |
-| 上传 PDF #1 | `add_file` | 报 `ADD_SOURCE_FILE … Server disconnected`（0.41s，SDK 内部重试用尽）；来源已注册（`956b415e…`）但**停在 PREPARING 超过 10 分钟**（字节从未上传，孤儿） |
-| 上传 PDF #3 | 用户重新执行 `auth login` 得到全新会话（`auth check` 通过，24 本）后，经适配层再试一次 | 仍报断开连接；又产生孤儿 `1f110338…`（PREPARING）。**排除“会话过旧”原因** |
-| 上传 PDF #4（改用 curl_cffi） | `NOTEBOOKLM_TRANSPORT=curl_cffi`，`pip` extra `impersonate`（curl-cffi 0.17.0），单次尝试 | **成功**：上传耗时 18.0s，source `23922e56…`，**READY**（等待 4.3s）；音频 `1b00b6b4…` 同为 READY。两个不同 source_id，均 READY；`sources.list` 另显示 4 个 PREPARING 孤儿（其中 1 个 `b072fa44…` 是 SDK 内部重试在某次失败中额外注册的，非我主动上传） |
-| 上传 PDF #2 | 经新适配层（对账后重试一次） | 仍报断开连接；又产生孤儿 `e67cdd11…`（PREPARING）。**PDF 尚无任何 READY 来源** |
+| 创建笔记本 | `scripts/gate1_live.py` | **PASS**：notebook_id `NB-T`，耗时 9.5s（含 auth check） |
+| 上传音频 | `sources.add_file(wait=False)` | SDK 报 `NetworkError (upload_finalize): Server disconnected without sending a response`；**但**随后列表显示该来源已存在且 **READY**（source `SRC-1`，word_count 26，READY 耗时 4.3s）。即“服务端已接收、响应被丢”，属 **误报失败** |
+| 诊断重试（诊断操作造成） | 为查原因再次 `add_file` 同一音频 | 同样报错且服务端再次接收 → 笔记本内出现**重复**音频来源 `SRC-6`（READY）。教训：失败后必须先查询来源再重试 |
+| 上传 PDF #1 | `add_file` | 报 `ADD_SOURCE_FILE … Server disconnected`（0.41s，SDK 内部重试用尽）；来源已注册（`SRC-5`）但**停在 PREPARING 超过 10 分钟**（字节从未上传，孤儿） |
+| 上传 PDF #3 | 用户重新执行 `auth login` 得到全新会话（`auth check` 通过，24 本）后，经适配层再试一次 | 仍报断开连接；又产生孤儿 `SRC-7`（PREPARING）。**排除“会话过旧”原因** |
+| 上传 PDF #4（改用 curl_cffi） | `NOTEBOOKLM_TRANSPORT=curl_cffi`，`pip` extra `impersonate`（curl-cffi 0.17.0），单次尝试 | **成功**：上传耗时 18.0s，source `SRC-2`，**READY**（等待 4.3s）；音频 `SRC-1` 同为 READY。两个不同 source_id，均 READY；`sources.list` 另显示 4 个 PREPARING 孤儿（其中 1 个 `SRC-4` 是 SDK 内部重试在某次失败中额外注册的，非人为主动上传） |
+| 上传 PDF #2 | 经新适配层（对账后重试一次） | 仍报断开连接；又产生孤儿 `SRC-3`（PREPARING）。**PDF 尚无任何 READY 来源** |
 
 结论与已验证事实：
 1. 认证与创建笔记本链路可用；音频来源可达 READY。
 2. NotebookLM 上传端点在本机网络上**间歇性断开连接且不返回响应**，服务端有时已落地（音频）、有时只注册未收字节（PDF，卡在 PREPARING）。**PDF 路径未打通 → Gate 1 条件 3 未满足，条件 4（网页问答）、条件 5 未执行。**
 3. 适配层已修复为“上传前按文件名查重、网络类错误先对账再决定是否重传、孤儿来源不复用并在错误 detail 中报告”，新增 5 个离线测试（共 16 个全部通过，ruff 通过）。该修复尚未被一次成功的真实 PDF 上传验证。
 4. 当前测试笔记本中遗留：1 个重复 READY 音频来源、3 个 PREPARING 孤儿 PDF 来源。**未删除任何云端内容**（待用户决定）。
-5. 未验证：notebook URL `https://notebooklm.google.com/notebook/6c8257f6…` 是否可在网页打开（需用户目检）。
+5. 未验证：notebook URL `https://notebooklm.google.com/notebook/<notebook-id>` 是否可在网页打开（需用户目检）。
 
 待决定的方案（均未执行）：A) 等待一段时间/换网络后再试一次 PDF；B) 启用 SDK 官方可选传输 `curl_cffi`（需安装 `notebooklm-py[impersonate]`，改变 TLS 指纹）；C) 先推进 Gate 2，同时保留 Gate 1 为 FAIL/BLOCKED。
 
@@ -92,7 +100,7 @@
 ### Gate 1 更新（curl_cffi 之后）
 - 结论：PDF 上传失败的原因在**传输层**，不是账号/会话/文件问题；换成 curl_cffi（浏览器式 TLS 指纹）后一次成功。SDK 自己把该传输标注为 PoC，已记录为风险；适配层默认启用，可用环境变量 `NOTEBOOKLM_TRANSPORT=httpx` 覆盖。
 - 离线测试：17 passed，ruff 通过。
-- 测试笔记本现状：2 个 READY 音频（含 1 个我造成的重复）、1 个 READY PDF、4 个 PREPARING 孤儿。均未删除。
+- 测试笔记本现状：2 个 READY 音频（含 1 个诊断操作造成的重复）、1 个 READY PDF、4 个 PREPARING 孤儿。均未删除。
 - **仍需用户**：在网页打开测试笔记本，对音频问“暗号是什么”（应答 green giraffe）、对 PDF 问“PDF 暗号是什么”（应答 purple owl 7421），并回告结果；同时确认网址能打开。
 
 
@@ -100,7 +108,7 @@
 - 笔记本网址 `https://notebooklm.google.com/notebook/<id>` 格式**真实可打开**（截图地址栏确认）。
 - 问“暗号是什么” → 回答“录音中的暗号是 green giraffe”（带来源引用）→ **音频转录与问答 PASS**。
 - 问“PDF 里的暗号是什么” → 回答“purple owl 7421”（带来源引用）→ **PDF 文字问答 PASS**。
-- 截图还显示：2 个 `gate1_audio.m4a`（含我造成的重复）、1 个正常 PDF（标题已被 SDK 改为 `gate1-pdf`），以及 4 个 `gate1_page.pdf` 红色错误孤儿（即此前失败上传留下的壳，网页上显示为不可用）。
+- 截图还显示：2 个 `gate1_audio.m4a`（含诊断操作造成的重复）、1 个正常 PDF（标题已被 SDK 改为 `gate1-pdf`），以及 4 个 `gate1_page.pdf` 红色错误孤儿（即此前失败上传留下的壳，网页上显示为不可用）。
 - 条件 5 保留项：无会话时 `AUTH_REQUIRED`（真实命令）✔；上传断连时给出 `UPLOAD_FAILED` + orphan id 且不重复上传（真实观察 + 5 个离线测试）✔；上传超时、429/5xx、SIGINT 的系统化注入留 Gate 4。
 - Gate 1 结论：**PASS**。后续 Gate 2 起不再需要对 Gate 1 做额外云端上传。
 
@@ -204,13 +212,13 @@ PDF 内容核验：封面有可选中提取的中文标题、作者、原视频 
 |---|---|---|
 | 1 | `bili2nb auth check` | OK（24 本） |
 | 2 | `bili2nb import "…BV1W64y147w7?p=5" --json` | **FAIL**，exit 22 `UPLOAD_FAILED`（原始异常 `httpx.RequestError`，被当作“未知错误”）。转换成功（音频 3.2 MB、PDF 9 页/1.4 MB，15 s）；笔记本已建；**任务已持久化**（job `20261108-175358-200f`，stage=notebook_created，0 个来源） |
-| 3 | 云端核查（只读） | 账号笔记本数 24→**26**：出现**两本同名笔记本**，创建时间只差 2 秒（`4e8482dd…` 被任务记录；`9159a9e2…` 为**重复的空笔记本**） |
-| 4 | 定位 | SDK 内置的服务端错误自动重试（`server_error_max_retries=3`）在第一次“创建笔记本”响应丢失后**又发了一次非幂等的创建请求**。我的对账逻辑只包住了 SDK 之外的调用，拦不住 SDK 内部重试 |
-| 5 | 修复（先写失败测试再修） | ① `create_notebook` 用 `server_error_max_retries=0` 的客户端，重试交给我们自己的对账；② `httpx.RequestError`（curl_cffi 抛出的原始网络错误）纳入网络类错误，创建/上传都会先对账再决定是否重试，并映射为可退避的 `NETWORK_ERROR`。新增 4 个回归测试（修复前 4 个全部失败），全套 **134 passed**，ruff 通过 |
+| 3 | 云端核查（只读） | 账号笔记本数 24→**26**：出现**两本同名笔记本**，创建时间只差 2 秒（`NB-1` 被任务记录；`NB-D1` 为**重复的空笔记本**） |
+| 4 | 定位 | SDK 内置的服务端错误自动重试（`server_error_max_retries=3`）在第一次“创建笔记本”响应丢失后**又发了一次非幂等的创建请求**。当时的对账逻辑只包住了 SDK 之外的调用，拦不住 SDK 内部重试 |
+| 5 | 修复（先写失败测试再修） | ① `create_notebook` 用 `server_error_max_retries=0` 的客户端，重试交给本项目自己的对账；② `httpx.RequestError`（curl_cffi 抛出的原始网络错误）纳入网络类错误，创建/上传都会先对账再决定是否重试，并映射为可退避的 `NETWORK_ERROR`。新增 4 个回归测试（修复前 4 个全部失败），全套 **134 passed**，ruff 通过 |
 | 6 | `bili2nb retry 20261108-175358-200f` | **FAIL**，exit 25 `NETWORK_ERROR`：预检/查笔记本连续网络错误，按设计退避 5 s、15 s 后停止，任务保持可恢复，未新建任何笔记本 |
 | 7 | 网络诊断（只读，未改任何网络设置） | 同一时段：SDK 列表请求 curl_cffi 8 次失败 6 次（`curl: (56) Connection closed abruptly`）、httpx 8 次失败 6 次（`incomplete chunked read`）；**纯 `curl https://www.google.com/` 10 次失败 7 次（`curl: (18) Transferred a partial file`）**。结论：本机到 Google 的网络路径在传输中途截断响应（本机无系统代理，但存在多个 utun 虚拟网卡），属环境问题，非本项目代码。Gate 1 当时的“服务端断开”很可能同源 |
 
-**云端遗留（均未删除，待用户决定）**：重复的空笔记本 `9159a9e2…`；目标笔记本 `4e8482dd…`（目前 0 个来源，等待 retry 填充）；Gate 1 测试笔记本及其孤儿来源。
+**云端遗留（均未删除，待用户决定）**：重复的空笔记本 `NB-D1`；目标笔记本 `NB-1`（目前 0 个来源，等待 retry 填充）；Gate 1 测试笔记本及其孤儿来源。
 
 **Gate 3 状态：仍 BLOCKED**——真实端到端未完成（两个来源 READY、二次运行不重复、真实恢复），原因是上述网络不稳定；但这次真实运行**发现并修复了一个会重复建本的严重缺陷**（验收一票否决项的同类风险）。
 
@@ -230,12 +238,12 @@ PDF 内容核验：封面有可选中提取的中文标题、作者、原视频 
 ### Gate 3 补充记录（19:20，FDM 已停止下载后重试）
 - 用户确认 FDM 下载结束（脚本实测 fdm 入站速率 0 KB/s）后，对同一任务执行 `bili2nb retry 20261108-175358-200f`。
 - 结果：仍 `UPLOAD_FAILED`（音频注册成功后，字节上传被服务端断开）。**带宽被占用不是唯一原因**。
-- 云端核对（只读）：笔记本 `4e8482dd…` 现有 4 个 `audio.m4a` 孤儿来源（均 PREPARING），0 个 READY；账号笔记本总数未增加。
+- 云端核对（只读）：笔记本 `NB-1` 现有 4 个 `audio.m4a` 孤儿来源（均 PREPARING），0 个 READY；账号笔记本总数未增加。
 - 结论：Gate 3 仍为 **BLOCKED**，未做任何云端删除。
 
 ### Gate 3 补充记录（授权清理孤儿后重试）
 - 用户授权“只清理本工具自己留下的、卡在 PREPARING/ERROR 的来源”。实现：`upload_file` 上传前清理同名卡住来源，失败后删除本次孤儿并改为可重试的 `NETWORK_ERROR`；新增 5 项测试（共 140 项通过，ruff 通过）。只删 PREPARING/ERROR 且文件名匹配者，READY/PROCESSING 与他人来源不动。
-- 已清理笔记本 `4e8482dd…` 中 4 个 `audio.m4a` PREPARING 孤儿（真实删除，核对后笔记本来源数 0）。
+- 已清理笔记本 `NB-1` 中 4 个 `audio.m4a` PREPARING 孤儿（真实删除，核对后笔记本来源数 0）。
 - 随后 `retry`：5 次自动退避（3/9/27/81s）上传音频仍均被服务端断开，每次孤儿都被自动清理；最终 `NETWORK_ERROR`（可安全重试），无孤儿残留，笔记本总数未增加。
 - 结论：清理机制验证有效；上传本身仍受本机到 Google 的连接不稳影响，Gate 3 仍为 **BLOCKED**。
 
@@ -246,8 +254,8 @@ PDF 内容核验：封面有可选中提取的中文标题、作者、原视频 
 - `retry 20261108-175358-200f`：音频经 4 次退避后（共 attempts=7）上传成功，PDF 复用此前已被服务端收下的来源；两个来源均 **READY**；任务 `completed`，输出 NotebookLM URL；成功后本地媒体已清理（files_cleaned=true）。
 - 幂等：再次 `import` 同一链接，返回 `reused: true`、原笔记本 URL、source_count=2；账号笔记本总数前后均为 26（未新建）。
 - 已清理本工具遗留的卡住来源（PREPARING，同名）共 5 个，未触碰 READY 来源。
-**Gate 3 状态：PASS（自动化部分，真实证据如上）；待办**：① 用户在网页确认笔记本内含 2 个来源且问答可用；② 笔记本中另有 2 个我诊断时上传的 `gate1_audio.m4a` 测试来源（READY），超出已授权的删除范围，待用户同意后删除；③ 第一次失败遗留的空重复笔记本 `9159a9e2…` 仍待用户决定。
-- 用户已同意后，删除了任务笔记本 `4e8482dd…` 中我诊断时上传的 2 个 `gate1_audio.m4a` 测试来源（READY）。核对：笔记本现仅含 `audio.m4a`（READY）与 `keyframes.pdf`（READY）共 2 个来源。仍待：用户网页确认；空重复笔记本 `9159a9e2…` 待用户决定。
+**Gate 3 状态：PASS（自动化部分，真实证据如上）；待办**：① 用户在网页确认笔记本内含 2 个来源且问答可用；② 笔记本中另有 2 个诊断时上传的 `gate1_audio.m4a` 测试来源（READY），超出已授权的删除范围，待用户同意后删除；③ 第一次失败遗留的空重复笔记本 `NB-D1` 仍待用户决定。
+- 用户已同意后，删除了任务笔记本 `NB-1` 中诊断时上传的 2 个 `gate1_audio.m4a` 测试来源（READY）。核对：笔记本现仅含 `audio.m4a`（READY）与 `keyframes.pdf`（READY）共 2 个来源。仍待：用户网页确认；空重复笔记本 `NB-D1` 待用户决定。
 
 ## Gate 4 — 可靠性、视觉效果及性能回归（2026-11-08/09，结论见本节末）
 
@@ -262,7 +270,7 @@ PDF 内容核验：封面有可选中提取的中文标题、作者、原视频 
 （耗时取 `/usr/bin/time -l`；CPU user 时间 9–55 s；原始数据：`tmp/gate4/*.json/*.err`。）
 
 ### 2. PPT 样本召回/重复（人工参照 + 仅作对照的程序统计）
-- 参照清单建立方法：对该 38 分钟视频每 4 秒密采样，按画面主体变化>3%分出独立页，**我人工逐张目视核对联系表**，确认共 **14 个独立页面**（标题页、目录、章节页、陆九渊页、阳明心学页…谢谢观赏；联系表：`tmp/gate4/ref/lecture_states.jpg`）。局限：4 秒采样可能漏掉短于 4 秒的页；参照由我人工核对，用户可复核。
+- 参照清单建立方法：对该 38 分钟视频每 4 秒密采样，按画面主体变化>3%分出独立页，**人工逐张目视核对联系表**，确认共 **14 个独立页面**（标题页、目录、章节页、陆九渊页、阳明心学页…谢谢观赏；联系表：`tmp/gate4/ref/lecture_states.jpg`）。局限：4 秒采样可能漏掉短于 4 秒的页；参照由人工核对，可复核（联系表见开发记录）。
 - **发现的缺陷**：该视频带烧录字幕，同一页因字幕变化被当成多页——修复前 17 页：召回 13/14=93%，**重复 4 页=24%（超过 ≤10% 目标）**。
 - **修复**：比较帧时忽略底部 14% 字幕带（保存的截图不裁剪）；先写 4 项失败测试再改代码。
 - **修复后 14 页：召回 14/14=100%，重复 0 页=0%**（均与参照逐页对应，差异 0.000）。目标 召回≥90% / 重复≤10%：**达成（仅限此测试样本，不外推）**。
@@ -296,19 +304,19 @@ SceneDetect 失败 → 回退定时取帧并写 warning（单元测试覆盖）�
 **样本**：BV1QW4y1e7iC?p=2（PPT 讲座 38 分钟，音频 37.2 MB，PDF 2.3 MB/14 张）。
 **第一次 `import`（修复前）失败**：音频上传 5 次均 `NETWORK_ERROR`（3.2 MB 以上的单请求上传会被断开），每次失败遗留的卡住来源已被自动清理。
 **根因 1：大文件单请求上传在本链路上约 8 秒被断开** → 新增 `notebook/chunked_upload.py`：按 Google 断点续传协议每 2 MB 一块上传（`upload` + offset，最后一块 `upload, finalize`），每块失败先 `query` 服务端已收字节再从服务端偏移量续传，每块最多 4 次、有界。10 项离线逻辑测试（用模拟服务器注入“回执丢失/未收到/最终化丢失/持续失败/不可重试”）。
-**真实验证**：测试笔记本中 37 MB 音频一次成功（68 s，约 140 s 后 READY）；随后 `retry` 任务：音频+PDF 上传共 135.8 s、**首轮零网络错误**、READY 用 39.7 s，任务 `completed`，两个来源均 READY，本地文件已清理。笔记本 `c3b6f6c2…` 含 `audio.m4a`（READY）与关键帧 PDF（READY）。
+**真实验证**：测试笔记本中 37 MB 音频一次成功（68 s，约 140 s 后 READY）；随后 `retry` 任务：音频+PDF 上传共 135.8 s、**首轮零网络错误**、READY 用 39.7 s，任务 `completed`，两个来源均 READY，本地文件已清理。笔记本 `NB-2` 含 `audio.m4a`（READY）与关键帧 PDF（READY）。
 **根因 2（严重，Gate 4 否决项类）：重复建本**。本次导入又出现两个同名笔记本（创建时间相差 2 秒；Gate 3 首次也是同样模式）。SDK 自身已声明创建“只发一次”且禁用内部重试，所以问题在更底层：用本地探针 `scripts/probe_curl_post_retry.py` 复现——**libcurl 在“被复用的长连接无响应断开”时会静默重发 POST**（本机服务端收到 2 次 POST；加 `FRESH_CONNECT`+`FORBID_REUSE` 后为 1 次）。Google 常常处理完请求后才断开连接，于是创建被执行两次；同一机制也解释了每次上传都多出一个卡住的“孪生”来源。
 **修复**：`NotebookAdapter` 对非幂等写（创建笔记本、上传）强制每个请求使用新连接（`_fresh_connections`），只读/幂等调用不受影响；上传成功后顺带清理同名卡住孪生。单元测试 164 项通过，ruff 通过。
-**⚠ 未完成的真实验证**：根因 2 的修复**尚未在真实“创建笔记本”上验证**（本次长视频笔记本是修复前创建的）。账号笔记本现 28 个：其中 `9159a9e2…`（Gate 3）与 `e3f768a9…`（本次）是修复前产生的**空重复笔记本**，均未删除，待用户决定。
+**⚠ 未完成的真实验证**：根因 2 的修复**尚未在真实“创建笔记本”上验证**（本次长视频笔记本是修复前创建的）。账号笔记本现 28 个：其中 `NB-D1`（Gate 3）与 `NB-D2`（本次）是修复前产生的**空重复笔记本**，均未删除，待用户决定。
 **Gate 4 当前判定：尚不能标 PASS**——硬性条件 1–7 的本地与真实证据已具备，但“严重重复建本”是 Gate 4 的 FAIL 条件，修复需用一次真实导入确认只产生 1 个笔记本后，才能通过。
 
 ### Gate 4 修复后真实验证（用户同意，2026-11-09）
 样本：BV1VV4y1V7Pz（Excel 屏幕教程，6.3 分钟，音频 6.1 MB，PDF 2.3 MB/17 张）。修复后的代码，`import` 一次：
-- 账号笔记本数 **28 → 29**，同名笔记本 **恰好 1 个**（`e404a7e1…`），**无重复**；
+- 账号笔记本数 **28 → 29**，同名笔记本 **恰好 1 个**（`NB-3`），**无重复**；
 - 两个来源 `audio.m4a`、关键帧 PDF 均 **READY**，且**没有卡住的孪生来源**（修复前每次上传都会多出一个）；
 - `attempts=1`，零网络错误/零重试；用时：转换 13.3 s、建本 6.6 s、上传 56.9 s、READY 8.2 s；
 - 再次 `import` 同一链接：`reused: true`，返回原笔记本 URL，笔记本总数仍为 29。
-局限：仅 1 次真实创建；修复前 2/2 次导入出现重复，修复后 1/1 次无重复，样本量小，Gate 5 的第二条视频会再次观察。账号中仍有 2 个修复前遗留的空重复笔记本（`9159a9e2…`、`e3f768a9…`），未删除，待用户决定。
+局限：仅 1 次真实创建；修复前 2/2 次导入出现重复，修复后 1/1 次无重复，样本量小，Gate 5 的第二条视频会再次观察。账号中仍有 2 个修复前遗留的空重复笔记本（`NB-D1`、`NB-D2`），未删除，待用户决定。
 
 ## Gate 4 结论：**PASS**
 - 条件 1：三类真实样本（含 38 分钟长视频）完成 benchmark，并**完成长视频与短视频的真实 import**（两者来源均 READY）。
@@ -321,49 +329,36 @@ SceneDetect 失败 → 回退定时取帧并写 warning（单元测试覆盖）�
 - FAIL 条件核对：无数据丢失；无明文凭证泄漏（任务库只存 id 与路径）；**重复建本**在测试中出现过 2 次，已定位根因（libcurl 静默重发 POST）、修复，并经真实创建验证；无不可恢复的网络中断（长视频上传经分块续传成功）。
 
 
-## Gate 5 — 最终用户验收（进行中，2026-11-09）
+## Gate 5 — 最终验收（2026-11-09；标准于 V1.1 修订）
 
-### 已由我实测的项（对应 ACCEPTANCE Gate 5 条件）
-- 条件 4（第二条不同视频、无需重复登录）：已先后真实导入 3 条不同视频（`?p=5` PPT 短片、38 分钟讲座、6 分钟 Excel 教程），每次都是新进程/新命令，**未重复登录**，均成功。
-- 条件 5（无认证时 convert 成功、import 明确 AUTH_REQUIRED）：用不存在的 profile 模拟，`convert` 成功，`import`/`auth check` 报 `AUTH_REQUIRED`（退出码 20），下载前即失败。**未真实清除你的登录状态**（那会要求你重新登录，需你自己决定）。
-- 条件 6（README 示例可复现）：干净临时目录 `uv sync`→help→pytest→ruff→convert→auth check 全部通过。
-- 条件 7：未删除任何云端笔记本；凭证扫描：项目文件/日志/文档/任务库未发现 Cookie 或令牌特征（仅 1 处测试中的“不应出现”断言）；任务库无敏感列且权限 600；`.gitignore` 忽略凭证/媒体/数据库；git 无任何提交，已暂存文件中无敏感文件。
+**结果：PASS**。V1.1 起验收标准为：CLI 自动完成导入（无人工上传/转录）、两个来源均 READY、NotebookLM **网页版**可对视频语音和至少一个视觉信息点正常问答。手机端 NotebookLM 同步由 Google 负责，不再是必验项（使用者曾自愿在手机上确认过笔记本与来源可见，未计时、不计入判定）。
 
-### 需要你做的验收项
-1. 条件 1/2：打开下列链接，确认各有 2 个来源且 READY；对**视频语音**和**至少一个画面信息点**各问一个问题，核对答案是否准确：
-   - 38 分钟讲座：https://notebooklm.google.com/notebook/<notebook-id>
-   - 6 分钟 Excel 教程：https://notebooklm.google.com/notebook/<notebook-id>
-2. 条件 3：在手机 NotebookLM（同一 Google 账号）刷新，确认能找到上述笔记本和来源；请记下同步延时。
-3. （可选）条件 5 的真实版：`bili2nb auth logout` 后验证 convert 成功/import 报错，再 `auth login` 恢复——会清掉你本机登录状态，需要你自己执行或明确授权。
-4. 决定是否删除 2 个空重复笔记本与 Gate 1 测试笔记本（未授权前不删）。
-5. 最终确认：“我只需在 Mac 输入 B站链接，随后在我的 NotebookLM 里看到新笔记本”。
+### 对照 ACCEPTANCE Gate 5 的各项条件
+| 条件 | 结果 | 证据 |
+|---|---|---|
+| 1 首次授权一次后执行 `import` | PASS | Gate 3/4 真实导入（3 条不同视频） |
+| 2 无人工步骤；URL 可打开；两来源 READY；网页版语音 + 视觉问答准确 | PASS | 两个笔记本各 8 题（画面 / 语音 / 画面+语音 / 跨来源 / 反例），共 16 题全部通过；题目见 `GATE5_QA.md` |
+| 3 手机端可见 | 已取消（V1.1） | — |
+| 4 第二条不同视频成功；重启终端后无需重新登录 | PASS | 3 条不同视频真实导入，每次均为新进程/新命令，未重复登录 |
+| 5 无认证时 `convert` 成功、`import` 报 `AUTH_REQUIRED` | PASS（用不存在的 profile 模拟；未真实清除登录状态） | `convert` 成功；`import` / `auth check` 退出码 20，下载前即失败 |
+| 6 README 示例可复现 | PASS | 干净临时目录 `uv sync` → help → pytest → ruff → convert → auth check；V1.1 起另有 CI 的全局命令冒烟测试 |
+| 7 不擅自删除云端内容；Cookie 不进仓库/日志/导出包 | PASS | 云端删除仅在使用者明确同意后进行；凭证扫描（项目文件、日志、文档、任务库、Git 历史）未发现 Cookie 或令牌；任务库无敏感列 |
 
-### Gate 5 发现：PDF 封面在 NotebookLM 预览中乱码（用户手机截图反馈，2026-11-09）
-- 现象：每个 PDF 的第一页（封面，唯一含中文文字的页）在 Gemini/NotebookLM 来源预览里是乱码；电脑本地查看正常。截图页（图片）不受影响。
-- 根因：封面用了 ReportLab 内置 `STSong-Light`——**未嵌入的 CID 字体**，桌面阅读器用本机字体替代所以显示正常，NotebookLM 的预览/文本提取没有该字体，输出乱码。此前我只用 pypdf 验证“可提取”，该验证不能发现这个问题（我的验证盲区）。
-- 修复：改为**嵌入 TrueType 子集字体**（macOS 自带 `STHeiti Light`，备选 `Arial Unicode`；可用 `BILI2NB_PDF_FONT` 指定；找不到时回退旧字体并在 convert/import 的 warnings 中明确提示）。先写 2 项失败测试再实现：封面字体必须带 FontFile 且可提取中文；缺字体时回退并报告。
-- 验证：重新生成 6 分钟 Excel 教程 PDF，封面字体 `STHeitiTC-Light` 已嵌入且带 ToUnicode，pypdf 提取中文正确；Quick Look 渲染封面中文清晰（`tmp/gate5/thumb/keyframes.pdf.png`）。pytest 166 passed，ruff 通过。
-- 未完成：**已导入到你 NotebookLM 的 PDF 来源仍是旧版（乱码封面）**。要替换需删除旧 PDF 来源并重传，属于改动你的笔记本，待用户同意。
-- **已替换（用户同意，2026-11-09）**：两个笔记本中的旧 PDF 来源已替换为嵌入字体的新版（先上传新 PDF 并等 READY，再仅删除旧 PDF 来源 id，新来源改回原标题；任务记录同步更新）。结果：
-  - 6 分钟 Excel 教程 `e404a7e1…`：来源 `audio.m4a`（READY）+ 新 PDF（READY）。
-  - 38 分钟讲座 `c3b6f6c2…`：来源 `audio.m4a`（READY）+ 新 PDF（READY）。
-  账号笔记本总数仍为 29；音频来源与笔记本本身未动。脚本：`tmp/gate5/replace_pdf.py`。**待用户在手机/网页确认预览封面不再乱码。**
-- **用户确认（2026-11-09，手机 NotebookLM）：替换后的 PDF 封面预览显示正常，乱码问题已解决。** 这同时证明：手机端能看到这两个笔记本及其来源（Gate 5 条件 3 的一部分；同步延时未单独计时）。
-- **清理（用户同意，2026-11-09）**：已删除 3 个云端笔记本——`9159a9e2…`、`e3f768a9…`（两个**空**重复笔记本，删前核对均为 0 个来源）和 Gate 1 测试笔记本 `6c8257f6…`（“green giraffe / purple owl”，23 个测试来源）。账号笔记本 29 → 26；三个项目笔记本 `4e8482dd…`、`c3b6f6c2…`、`e404a7e1…` 保留。
-- **问答测试题**：见 `docs/GATE5_QA.md`（两个笔记本各 8 题：画面题/语音题/跨来源/反例）。画面题参考答案由我逐帧核对；语音题无转录，答案为推断，需以实际听到的为准。
+### 发现并修复：PDF 封面在 NotebookLM 预览中乱码
+- 现象：每个 PDF 的第一页（封面，唯一含中文文字的页）在 NotebookLM 来源预览里显示乱码；本地用桌面阅读器查看正常。截图页（图片）不受影响。
+- 根因：封面使用 ReportLab 内置 `STSong-Light`——**未嵌入的 CID 字体**。桌面阅读器用本机字体替代所以正常，NotebookLM 的预览/文本提取没有该字体，输出乱码。此前只用 pypdf 验证“文字可提取”，该检查发现不了字体未嵌入（验证盲区）。
+- 修复：改为**嵌入 TrueType 字体子集**（macOS：`STHeiti Light` / `Arial Unicode`；Windows：`simhei` / `msyh` / `simsun`；Linux：`wqy-microhei` / `DroidSansFallbackFull`；可用 `BILI2NB_PDF_FONT` 指定）；找不到可嵌入字体时回退旧字体，并在 `convert` / `import` 的 warnings 与 `doctor` 中明确提示。先写失败测试再实现。
+- 验证：重新生成的 PDF 封面字体已嵌入且带 ToUnicode，文字提取与渲染均正确；已用新 PDF 替换两个已导入笔记本里的旧 PDF 来源（先上传新 PDF 并等待 READY，再仅删除已知的旧 PDF 来源 ID），使用者确认预览显示正常。
+- 云端清理（使用者同意）：删除了 2 个空的重复笔记本（NB-D1、NB-D2，删前核对均为 0 个来源）和 Gate 1 的测试笔记本 NB-T（23 个测试来源）。
 
-## 用户需求：yt-dlp 式使用体验（2026-11-09，Gate 外的体验改进）
-需求：终端输入 `bili2notebooklm <链接或BV号>` 直接导入；首次使用设置工作目录与 Google 登录；macOS/Windows 各有默认工作路径且可手动修改。
-实现：`bili2notebooklm`（与 `bili2nb` 同一入口）、首个参数不是子命令即视为 `import`（选项可放前面）；裸 BV/av 号规范化后仍走原严格 URL 校验；`setup` 命令（交互或 `--work-dir/--no-login/--json`）；首次在终端运行自动引导，非终端从不提问；工作目录优先级 `BILI2NB_HOME` > 已保存设置 > 平台默认（macOS=原位置，Windows=`%APPDATA%\Bili2NotebookLM`）；配置文件只存路径、不存凭证；ffmpeg 安装提示按平台区分。
-验证：先写 41 项失败测试再实现；全套 **204 passed**，ruff 通过。真实验证（临时 uv tool 目录，不动 PATH）：在 `/` 目录运行 `bili2notebooklm --help`、`bili2notebooklm BV1VV4y1V7Pz --json`（已导入视频→`reused: true`，未新建笔记本）、无效输入→`INVALID_URL`(10)、非交互 `setup`。
-**事故与修复**：验证时 `setup` 在 `BILI2NB_HOME` 沙盒下仍把配置写进了你真实的默认目录（指向临时目录，会让任务库“消失”）。发现后立即删除了该 config.json（核对前它不存在，jobs.sqlite 未受影响，`jobs` 仍列出 3 个任务），并修复：`BILI2NB_HOME` 设置时配置文件放在该目录内；新增回归测试。
-局限：Windows 仅做了路径/提示的单元测试，未在 Windows 实机验证（ffmpeg、浏览器登录等）。尚未执行全局安装（`uv tool install .`），待用户执行或授权。
-
-**命令名更新（用户要求，2026-11-09）**：命令统一为 `bili2notebooklm`（与项目名一致；NotebookLM 虽已改名 Gemini Notebook，但大家仍习惯叫 NotebookLM），保留短别名 `bili2nb`，原 `bili2notebook` 已移除。上文验证用的是更名前的 `bili2notebook`，更名后重新做了真实安装验证（见下）。
+## 体验改进：yt-dlp 式使用（2026-11-09）
+- 需求：`bili2nb <链接或BV号>` 直接导入；首次使用设置工作目录与 Google 登录；各系统有默认工作目录且可手动修改。
+- 实现：第一个参数不是子命令即视为 `import`（选项可放前面）；裸 BV/av 号规范化后仍走原严格 URL 校验；`setup` 命令（交互或 `--work-dir/--no-login/--json`）；首次在终端运行自动引导，非终端从不提问；工作目录优先级 `BILI2NB_HOME` > 已保存设置 > 平台默认；配置文件只存路径，不存凭证；ffmpeg 安装提示按平台区分；命令名为 `bili2nb`（短）与 `bili2notebooklm`（与项目名一致）。
+- 验证：先写失败测试再实现；用临时 `uv tool` 目录在项目外运行 `--help`、`<BV号>`（已导入视频 → `reused: true`，未新建笔记本）、无效输入 → `INVALID_URL`（退出码 10）、非交互 `setup`。
+- **事故与修复**：验证时 `setup` 在 `BILI2NB_HOME` 沙盒下仍把配置写进真实的默认目录（会让任务库“消失”）。发现后立即删除该 `config.json`（任务库未受影响），并修复为：设置了 `BILI2NB_HOME` 时配置文件放在该目录内；新增回归测试。
 
 ## 跨平台自动测试（GitHub Actions，2026-11-09）
-仓库已公开：https://github.com/zvision755/Bili2NotebookLM 。每次推送自动在 **macOS / Windows / Linux（ubuntu）** 三个云端环境各跑：`uv sync` → `ruff` → 离线 pytest（230 项）→ `doctor`；另有“安装成全局命令”冒烟测试（`uv tool install . --overrides overrides.txt` 后在项目外运行 `bili2nb --help`、`doctor`、`bili2nb <BV号>`）。最新提交 6/6 任务全部通过。
-CI 真实抓到并促成修复的 Windows 问题：① 离线测试守卫禁止了所有 `connect()`，而 Windows 的 asyncio 用回环 `connect()` 建事件循环，导致所有异步测试失败（现放行回环地址）；② Typer 在 GitHub Actions 强制带颜色码，拆开了帮助文字里的选项名；③ ffmpeg 安装提示、文件权限（0600）的断言是 macOS 专属。
-Windows CI 上 `bili2nb doctor` 实测：Python 3.12、ffmpeg 9.0.2、yt-dlp、opencv、notebooklm-py 0.8.6、中文字体可嵌入（simhei/msyh 之一）、工作目录 `%APPDATA%\Bili2NotebookLM` 均 OK；Google 登录为 WARN（CI 没有账号，符合预期）。
-**未覆盖**：Windows/Linux 上的真实 Google 浏览器登录、真实 NotebookLM 导入、真实 Bilibili 下载（云端 CI 不登录 Google，也未做真实下载）——需要在真实 Windows 电脑上由用户手动验证。
-公开前已清理：文档中的笔记本完整链接与本机路径；提交历史压缩为单个提交（提交身份使用 GitHub noreply 邮箱），未包含任何凭证。
+- 每次推送在 macOS / Windows / Linux 各运行：安装依赖 → Ruff → 离线 Pytest → `doctor`；另有“安装成全局命令”冒烟测试（`uv tool install . --overrides overrides.txt` 后在项目目录外运行）。V1.1 对 CI 做了加固，详见 V1.1_HARDENING.md。
+- CI 实际抓到并促成修复的 Windows 问题：① 离线测试守卫禁止了所有 `connect()`，而 Windows 的 asyncio 用回环 `connect()` 建事件循环，导致所有异步测试失败（现放行回环地址）；② Typer 在 GitHub Actions 强制带颜色码，拆开了帮助文字里的选项名；③ ffmpeg 安装提示、文件权限（0600）的断言是 macOS 专属。
+- Windows CI 上 `bili2nb doctor` 实测：Python、ffmpeg、yt-dlp、opencv、notebooklm-py、中文字体（可嵌入）、工作目录（`%APPDATA%\Bili2NotebookLM`）均 OK；Google 登录为 WARN（CI 没有账号，符合预期）。
+- **未覆盖**：Windows / Linux 上的真实 Google 浏览器登录、真实 NotebookLM 导入、真实 B 站下载。

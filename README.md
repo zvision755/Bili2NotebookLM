@@ -208,6 +208,14 @@ bili2notebooklm retry <job_id>       # 或直接重新 import
 | 20 | 需要重新登录 | 30 | 找不到任务 |
 | 1 | 内部错误 | 130 | 被用户中断 |
 
+## 凭证与隐私
+
+- **Google 登录**：由你本人在浏览器里完成，不需要、也不接受手工粘贴 Cookie。登录状态由 `notebooklm-py` 保存在 `~/.notebooklm/profiles/<profile>/storage_state.json`（Windows：`%USERPROFILE%\.notebooklm\...`；可用环境变量 `NOTEBOOKLM_HOME` 改位置）。这个文件相当于你的登录凭证：**本工具不读取其内容、不打印、不复制**，任务库和 `--json` 输出里也没有 Cookie。
+- **B 站**：只处理公开视频，下载不使用任何登录信息。
+- **登录失效**：`import` 会在下载之前报 `AUTH_REQUIRED`（退出码 20），`convert` 不受影响。重新执行 `bili2nb setup`（或 `bili2nb auth login`）登录即可，然后 `bili2nb retry <job_id>`。
+- **绝不要提交或分享**：`~/.notebooklm/`、`storage_state*.json`、`*cookies*`、`.env*`、`jobs.sqlite`、工作目录、下载的音视频、生成的 PDF、日志、含真实笔记本链接的截图。`.gitignore` 已覆盖并有自动化测试。
+- 详见 [SECURITY.md](SECURITY.md)（漏洞报告、凭证保护、非官方 API 风险）。
+
 ## 已知限制
 
 - NotebookLM 单个上传文件上限 200 MB；音频超过上限时会明确报错。
