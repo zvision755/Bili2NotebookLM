@@ -57,3 +57,12 @@ def test_required_doctor_checks_must_be_ok_but_login_may_warn(smoke):
     assert smoke.doctor_problems(broken)
     missing = {"status": "ok", "checks": ok["checks"][1:]}
     assert smoke.doctor_problems(missing)
+
+
+def test_bare_python_in_cmd_means_the_interpreter_running_the_script(smoke):
+    """Live CI failure (Windows): a bare `python` was resolved to the runner's system Python, which
+    does not have bili2nb installed. `python` must mean sys.executable (the uv venv interpreter)."""
+    assert smoke.resolve_cmd(["python", "-m", "bili2nb"]) == [sys.executable, "-m", "bili2nb"]
+    assert smoke.resolve_cmd(["python3", "-m", "bili2nb"]) == [sys.executable, "-m", "bili2nb"]
+    assert smoke.resolve_cmd(["bili2nb"]) == ["bili2nb"]  # a launcher is resolved through PATH
+    assert smoke.resolve_cmd(["/abs/python", "-m", "x"]) == ["/abs/python", "-m", "x"]  # explicit path kept

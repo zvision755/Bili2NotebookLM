@@ -74,6 +74,17 @@ def doctor_problems(report: dict) -> list[str]:
     return problems
 
 
+def resolve_cmd(cmd: list[str]) -> list[str]:
+    """A bare `python`/`python3` means THIS interpreter (sys.executable), not whatever PATH finds.
+
+    On the Windows runner, `python` resolved to the system Python that has no bili2nb installed
+    (the project lives in uv's venv). Launchers such as `bili2nb` still go through PATH, which is
+    exactly what the global-install job wants to test."""
+    if cmd and cmd[0] in ("python", "python3"):
+        return [sys.executable, *cmd[1:]]
+    return list(cmd)
+
+
 def _invoke(cmd: list[str], args: list[str], env: dict, cwd: str):
     return subprocess.run(
         [*cmd, *args], capture_output=True, text=True, encoding="utf-8", errors="replace",
@@ -84,6 +95,7 @@ def _invoke(cmd: list[str], args: list[str], env: dict, cwd: str):
 def run(cmd: list[str], expect_auth_exit: int = 20) -> list[str]:
     """Return a list of failed expectations (empty = all passed)."""
     problems: list[str] = []
+    cmd = resolve_cmd(cmd)
     with tempfile.TemporaryDirectory(prefix="b2n-smoke-") as tmp:
         tmp_p = Path(tmp)
         env = {
