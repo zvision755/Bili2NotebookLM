@@ -22,23 +22,23 @@ PINNED_SDK = "0.8.6"  # the only version verified live (see docs/TEST_REPORT.md)
 
 #: What we rely on, and why. Kept as data so docs and tests share one source of truth.
 PRIVATE_API_INVENTORY: list[dict[str, str]] = [
-    {"api": "client.sources._uploader  (SourceUploadPipeline instance)",
+    {"key": "_uploader", "api": "client.sources._uploader  (SourceUploadPipeline instance)",
      "why": "replace the single-request body upload with chunked, resumable upload"},
-    {"api": "SourceUploadPipeline.upload_file_streaming(upload_url, file_obj, *, filename, on_progress, total_bytes, logger, expected_epoch)",
+    {"key": "upload_file_streaming", "api": "SourceUploadPipeline.upload_file_streaming(upload_url, file_obj, *, filename, on_progress, total_bytes, logger, expected_epoch)",
      "why": "the method we replace; signature must match exactly"},
-    {"api": "SourceUploadPipeline._client_factory / _live_cookies / _authuser_header / _resolve_upload_timeout / _track_transport_client / assert_epoch",
+    {"key": "_client_factory", "api": "SourceUploadPipeline._client_factory / _live_cookies / _authuser_header / _resolve_upload_timeout / _track_transport_client / assert_epoch",
      "why": "build an authenticated HTTP client for each chunk like the SDK does"},
-    {"api": "notebooklm._web.sources.upload: _validate_resumable_upload_url, _upload_url_origin, raise_for_upload_status, maybe_await_callback",
+    {"key": "_validate_resumable_upload_url", "api": "notebooklm._web.sources.upload: _validate_resumable_upload_url, _upload_url_origin, raise_for_upload_status, maybe_await_callback",
      "why": "validate the resumable URL (SSRF guard), set Origin/Referer, classify HTTP errors, progress callback"},
-    {"api": "notebooklm._curl_cffi_transport.CurlCffiAsyncClient.__init__(session_factory=...)",
+    {"key": "session_factory", "api": "notebooklm._curl_cffi_transport.CurlCffiAsyncClient.__init__(session_factory=...)",
      "why": "inject libcurl FRESH_CONNECT/FORBID_REUSE so libcurl cannot silently re-send a POST"},
-    {"api": "curl_cffi.CurlOpt.FRESH_CONNECT / FORBID_REUSE; AsyncSession(curl_options=...)",
+    {"key": "FRESH_CONNECT", "api": "curl_cffi.CurlOpt.FRESH_CONNECT / FORBID_REUSE; AsyncSession(curl_options=...)",
      "why": "the libcurl options themselves"},
-    {"api": "NotebookLMClient.from_storage(server_error_max_retries=...)",
+    {"key": "server_error_max_retries", "api": "NotebookLMClient.from_storage(server_error_max_retries=...)",
      "why": "disable the SDK's own retry of the non-idempotent notebook create"},
-    {"api": "exceptions carry .source_id after registration (NetworkError / SourceAddError)",
+    {"key": "source_id", "api": "exceptions carry .source_id after registration (NetworkError / SourceAddError)",
      "why": "ownership evidence for an orphan source (best effort; absence is tolerated)"},
-    {"api": "env NOTEBOOKLM_TRANSPORT=curl_cffi",
+    {"key": "NOTEBOOKLM_TRANSPORT", "api": "env NOTEBOOKLM_TRANSPORT=curl_cffi",
      "why": "browser-fingerprint transport; plain httpx was disconnected by the upload endpoint"},
 ]
 

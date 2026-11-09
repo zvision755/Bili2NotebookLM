@@ -78,6 +78,5 @@ def test_sdk_inventory_doc_covers_every_inventory_entry():
     doc = (ROOT / "docs" / "SDK_PRIVATE_API.md").read_text(encoding="utf-8")
     assert PINNED_SDK in doc
     for item in PRIVATE_API_INVENTORY:
-        key = item["api"].split("(")[0].split(":")[0].split(" / ")[0].strip()
-        key = key.replace("client.", "").replace("notebooklm._web.sources.upload", "").strip(" ,:")
-        assert key.split()[0][:25] in doc, f"docs/SDK_PRIVATE_API.md does not mention {item['api'][:50]}"
+        assert item["key"] in doc, f"docs/SDK_PRIVATE_API.md does not mention {item['key']}"
+        assert item["why"]
