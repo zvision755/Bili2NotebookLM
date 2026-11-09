@@ -120,6 +120,27 @@ jobs:
           python "$GITHUB_WORKSPACE/scripts/ci_smoke.py" --cmd bili2nb
           python "$GITHUB_WORKSPACE/scripts/ci_smoke.py" --cmd bili2notebooklm
 
+  readme-linux:
+    # Executes the README's Linux install block VERBATIM on a clean Ubuntu runner that has no uv,
+    # ffmpeg or CJK font pre-installed (only the interactive `setup` and the network `git clone`
+    # are skipped; the checkout under test is installed instead of `main`).
+    name: README install block / ubuntu (verbatim)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Run the README Linux block
+        run: >
+          python3 scripts/run_readme_block.py --heading "### Linux"
+          --skip "bili2nb setup" --skip "git clone" --cd-to "$GITHUB_WORKSPACE"
+      - name: Smoke-test what the README installed
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          cd "$HOME"
+          python3 "$GITHUB_WORKSPACE/scripts/ci_smoke.py" --cmd bili2nb
+
   negative-control:
     # Proves the smoke check can FAIL: with a deliberately wrong expected exit code the script
     # must exit non-zero. If this job ever goes red, the smoke check has stopped being a check.

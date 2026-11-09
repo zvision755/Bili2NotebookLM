@@ -80,3 +80,13 @@ def test_sdk_inventory_doc_covers_every_inventory_entry():
     for item in PRIVATE_API_INVENTORY:
         assert item["key"] in doc, f"docs/SDK_PRIVATE_API.md does not mention {item['key']}"
         assert item["why"]
+
+
+def test_release_notes_draft_is_honest_and_consistent():
+    import tomllib
+
+    version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+    notes = (ROOT / "docs" / f"RELEASE_NOTES_v{version}.md").read_text(encoding="utf-8")
+    assert "草稿" in notes and "尚未发布" in notes  # never presented as already published
+    for needle in ("已验证", "尚未验证", "Windows", "Linux", "非官方", "发布前检查清单", "MIT"):
+        assert needle in notes, f"release notes must mention {needle}"

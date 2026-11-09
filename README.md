@@ -66,7 +66,7 @@ macOS 默认用 **Chrome** 登录；没有 Chrome 就 `bili2nb setup --browser m
 ### Linux（Debian / Ubuntu 为例）
 
 ```bash
-sudo apt install -y git ffmpeg fonts-wqy-microhei    # fonts-wqy-microhei：让 PDF 封面中文能嵌入字体
+sudo apt update && sudo apt install -y git curl ffmpeg fonts-wqy-microhei   # fonts-wqy-microhei：让 PDF 封面中文能嵌入字体
 curl -LsSf https://astral.sh/uv/install.sh | sh      # 安装 uv，装完重新打开终端
 git clone https://github.com/zvision755/Bili2NotebookLM.git
 cd Bili2NotebookLM

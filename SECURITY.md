@@ -7,6 +7,8 @@
 
 Please do **not** post exploit details, cookies or logs in public issues. Use GitHub's private vulnerability reporting: repository → **Security** tab → **Report a vulnerability**.
 
+> 若该入口暂时不可用（需仓库所有者在 Settings → Code security 中启用），请开一个**不含任何细节**的公开 Issue，只写"需要私下联系渠道"，维护者会提供私密沟通方式。 If the private form is unavailable, open a public issue containing **no details**, only asking for a private contact channel.
+
 报告时请说明：受影响版本/提交、操作系统、复现步骤、影响范围。**不要附带真实的 Google 登录文件或 Cookie**；如日志里可能含敏感信息，先自行脱敏。
 
 ## 本工具如何保护 Google 登录凭证
