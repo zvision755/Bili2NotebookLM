@@ -38,7 +38,10 @@ packages = ["src/bili2nb"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["live: real network / NotebookLM tests, opt-in via --live"]
+markers = [
+  "live: real network / NotebookLM tests, opt-in via --live",
+  "real_chunked: exercise the real chunked-upload install path (no fake bypass)",
+]
 
 [tool.ruff]
 line-length = 100

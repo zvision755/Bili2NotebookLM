@@ -135,7 +135,7 @@ def test_upload_network_error_orphan_reported(monkeypatch):
     fake.delete_fails = True  # cleanup impossible -> orphan really remains
     with pytest.raises(Bili2nbError) as ei:
         _run_upload(fake, monkeypatch)
-    assert ei.value.code == "UPLOAD_FAILED" and "orphan_source_id=s4" in ei.value.detail
+    assert ei.value.code == "UPLOAD_FAILED" and "orphan_source_ids=s4" in ei.value.detail
     assert fake.add_calls == 1
 
 
@@ -289,36 +289,8 @@ def test_create_notebook_reconciles_on_raw_httpx_request_error(monkeypatch):
     assert _run_create(FakeNotebooks([], lost), monkeypatch) == "n5"
 
 
-# ---- orphan cleanup (user-authorised 2026-11-08: delete ONLY our own stuck sources)
-def test_upload_pre_cleans_only_same_name_stuck_sources(monkeypatch):
-    def ok(f, p):
-        return _src("new", "gate1_page.pdf", "PROCESSING")
-
-    fake = FakeSources(
-        [
-            _src("o1", "gate1_page.pdf", "PREPARING"),   # our stuck orphan -> delete
-            _src("o2", "gate1_page.pdf", "ERROR"),        # our failed orphan -> delete
-            _src("keep1", "gate1_page.pdf", "READY"),     # usable -> never touched (reused)
-            _src("keep2", "other.pdf", "PREPARING"),      # someone else's file -> never touched
-            _src("keep3", "notes.txt", "ERROR"),          # someone else's file -> never touched
-        ],
-        ok,
-    )
-    # READY twin exists, so it is reused, but stale orphans of the same name are still removed
-    assert _run_upload(fake, monkeypatch) == "keep1"
-    assert sorted(fake.deleted) == ["o1", "o2"]
-    assert fake.add_calls == 0
 
 
-def test_upload_never_deletes_ready_or_processing(monkeypatch):
-    def ok(f, p):
-        return _src("new", "gate1_page.pdf", "PROCESSING")
-
-    fake = FakeSources(
-        [_src("r", "gate1_page.pdf", "PROCESSING"), _src("q", "gate1_page.pdf", "READY")], ok
-    )
-    _run_upload(fake, monkeypatch)
-    assert fake.deleted == []
 
 
 def test_upload_deletes_orphan_it_just_created_and_becomes_retryable(monkeypatch):
@@ -343,31 +315,6 @@ def test_upload_cleanup_failure_is_best_effort(monkeypatch):
     assert _run_upload(fake, monkeypatch) == "new"  # cleanup failure must not block upload
 
 
-def test_cleanup_stuck_public_api(monkeypatch):
-    fake = FakeSources(
-        [
-            _src("a", "audio.m4a", "PREPARING"),
-            _src("b", "audio.m4a", "PREPARING"),
-            _src("c", "audio.m4a", "READY"),
-            _src("d", "x.pdf", "PREPARING"),
-        ],
-        lambda f, p: None,
-    )
-    ad_ = ad.NotebookAdapter()
-
-    class C:
-        sources = fake
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *x):
-            return False
-
-    monkeypatch.setattr(ad_, "_client", lambda **kw: C())
-    assert sorted(ad_.cleanup_stuck("nb", {"audio.m4a"})) == ["a", "b"]
-    assert sorted(x.id for x in fake.items) == ["c", "d"]
-    assert ad_.cleanup_stuck("nb", set()) == []  # empty name set deletes nothing
 
 
 def test_reconcile_prefers_usable_over_stuck_twin(monkeypatch):
@@ -393,28 +340,6 @@ def test_upload_success_also_removes_stuck_registration_twin(monkeypatch):
     assert fake.deleted == ["twin"] and any(x.id == "real" for x in fake.items)
 
 
-# ---- libcurl silently re-sends a POST when a REUSED connection dies without a response
-# (live duplicate notebooks + twin PREPARING sources; scripts/probe_curl_post_retry.py proves it)
-def test_fresh_connections_patch_applies_and_restores():
-    import curl_cffi.requests as cr
-    from curl_cffi import CurlOpt
-
-    orig = cr.AsyncSession
-    seen = {}
-
-    class Rec:
-        def __init__(self, *a, **kw):
-            seen.update(kw)
-
-    cr.AsyncSession = Rec
-    try:
-        with ad._fresh_connections():
-            cr.AsyncSession()  # what the SDK transport does (late import inside __init__)
-            assert seen["curl_options"][CurlOpt.FRESH_CONNECT] == 1
-            assert seen["curl_options"][CurlOpt.FORBID_REUSE] == 1
-        assert cr.AsyncSession is Rec  # restored to what was there before
-    finally:
-        cr.AsyncSession = orig
 
 
 def test_create_and_upload_run_with_fresh_connections(monkeypatch):

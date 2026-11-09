@@ -36,11 +36,12 @@ CREATE TABLE IF NOT EXISTS jobs (
   visual TEXT NOT NULL DEFAULT '{}',
   error_code TEXT, error_message TEXT, error_detail TEXT,
   warnings TEXT NOT NULL DEFAULT '[]', timings TEXT NOT NULL DEFAULT '{}',
-  attempts INTEGER NOT NULL DEFAULT 0, superseded INTEGER NOT NULL DEFAULT 0
+  attempts INTEGER NOT NULL DEFAULT 0, superseded INTEGER NOT NULL DEFAULT 0,
+  orphans TEXT NOT NULL DEFAULT '[]'
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_key ON jobs(video_key, account_key, mode);
 """
-_JSON_FIELDS = {"options", "sources", "ready", "visual", "warnings", "timings"}
+_JSON_FIELDS = {"options", "sources", "ready", "visual", "warnings", "timings", "orphans"}
 
 
 def _now() -> str:
@@ -77,6 +78,10 @@ class Job:
     timings: dict = field(default_factory=dict)
     attempts: int = 0
     superseded: bool = False
+    # Source ids this job registered that got stuck (PREPARING/ERROR) and could not be deleted yet.
+    # This is the ONLY evidence (besides 'created during the current call') that lets the tool
+    # delete a source: same-name alone never is.
+    orphans: list = field(default_factory=list)
 
 
 class JobStore:
@@ -85,10 +90,19 @@ class JobStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._conn()) as c:
             c.executescript(_SCHEMA)
+            self._migrate(c)
         try:
             self.path.chmod(0o600)
         except OSError:
             pass
+
+    @staticmethod
+    def _migrate(c: sqlite3.Connection) -> None:
+        """Add columns introduced after V1 to existing databases (idempotent)."""
+        cols = {r[1] for r in c.execute("PRAGMA table_info(jobs)")}
+        if "orphans" not in cols:
+            c.execute("ALTER TABLE jobs ADD COLUMN orphans TEXT NOT NULL DEFAULT '[]'")
+            c.commit()
 
     def _conn(self) -> sqlite3.Connection:
         c = sqlite3.connect(self.path, timeout=30)

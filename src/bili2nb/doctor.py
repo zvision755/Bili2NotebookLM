@@ -17,6 +17,7 @@ from pathlib import Path
 
 from bili2nb import config
 from bili2nb.media import audio, pdf
+from bili2nb.notebook import sdk_compat
 
 MIN_PYTHON = (3, 11)
 EXPECTED_NOTEBOOKLM_PY = "0.8.6"
@@ -130,6 +131,14 @@ def run_checks(online: bool = False) -> dict:
             checks.append(_check("notebooklm-py", "warn", ver, f"本项目只验证过 {EXPECTED_NOTEBOOKLM_PY}，其他版本可能不兼容"))
     except metadata.PackageNotFoundError:
         checks.append(_check("notebooklm-py", "fail", "未安装", "重新安装本工具"))
+
+    problems = sdk_compat.check()
+    if problems:
+        checks.append(_check("sdk-compat", "fail", "；".join(problems),
+                             "保持 notebooklm-py==0.8.6（uv tool install --force . --overrides overrides.txt）；"
+                             "不要手动升级 SDK。详见 docs/SDK_PRIVATE_API.md"))
+    else:
+        checks.append(_check("sdk-compat", "ok", f"私有接口检查通过（已验证版本 {sdk_compat.PINNED_SDK}）"))
 
     if pdf.cjk_font_embedded():
         checks.append(_check("pdf-font", "ok", f"中文字体将嵌入 PDF（{pdf.FONT}）"))

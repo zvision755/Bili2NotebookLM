@@ -225,9 +225,22 @@ class Importer:
         self.log(f"  笔记本 {nb_id}")
         return self._tick(job, "notebook", t0)
 
+    def _record_orphans(self, job: Job) -> Job:
+        """Persist ids of OUR stuck sources the adapter could not delete yet (ownership evidence)."""
+        drain = getattr(self.adapter, "drain_orphans", None)
+        ids = drain() if drain else []
+        if ids:
+            job = self.store.update(job.job_id, orphans=sorted(set(job.orphans) | set(ids)))
+        return job
+
     def _stage_upload(self, job: Job) -> Job:
         t0 = time.monotonic()
         nb = job.notebook_id
+        cleanup = getattr(self.adapter, "cleanup_owned", None)
+        if job.orphans and cleanup:
+            # Only ids this job recorded itself are ever deleted (never "same name" guesses).
+            remaining = self._backoff(lambda: cleanup(nb, job.orphans), "cleanup orphans")
+            job = self.store.update(job.job_id, orphans=sorted(remaining))
         for kind in self.kinds(job):
             if kind in job.sources:
                 self.log(f"  {kind} 已上传（{job.sources[kind]}），跳过。")
@@ -237,10 +250,15 @@ class Importer:
                 raise Bili2nbError("MEDIA_ERROR", f"待上传文件不存在: {path.name}。请重新运行 retry。")
             self.log(f"阶段 3/4：上传 {kind}（{path.stat().st_size / 1e6:.1f} MB）")
             title = source_title(kind, job.video_title or "")
-            sid = self._backoff(
-                lambda path=path, title=title: self.adapter.upload_file(nb, path, title=title),
-                f"upload {kind}",
-            )
+            try:
+                sid = self._backoff(
+                    lambda path=path, title=title, owned=tuple(job.orphans): self.adapter.upload_file(
+                        nb, path, title=title, owned=owned
+                    ),
+                    f"upload {kind}",
+                )
+            finally:
+                job = self._record_orphans(job)
             job = self.store.update(job.job_id, sources={**job.sources, kind: sid})  # checkpoint
             self.log(f"  {kind} source_id={sid}")
         job = self.store.update(job.job_id, stage="uploaded")
@@ -304,6 +322,7 @@ def job_to_dict(job: Job, *, reused: bool = False) -> dict:
         "source_ids": dict(job.sources),
         "source_ready": dict(job.ready),
         "source_count": len(job.sources),
+        "orphan_source_ids": list(job.orphans),
         "visual": job.visual,
         "files_cleaned": job.files_cleaned,
         "attempts": job.attempts,

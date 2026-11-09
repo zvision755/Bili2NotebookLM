@@ -102,17 +102,24 @@ def _require_ok(reply: ChunkReply) -> None:
 
 
 # --------------------------------------------------------------------------- SDK glue
-def install_chunked_upload(client, *, chunk_size: int = CHUNK_SIZE) -> bool:
+def install_chunked_upload(client, *, chunk_size: int = CHUNK_SIZE) -> None:
     """Replace the SDK pipeline's single-request body upload with the chunked one.
 
-    Touches a private SDK attribute (`client.sources._uploader`), so it is guarded: returns
-    False (SDK default behaviour is kept) if the SDK layout is not what we expect.
+    Touches a private SDK attribute (`client.sources._uploader`). If the SDK layout is not what
+    we verified this RAISES `SDK_INCOMPATIBLE`: silently keeping the SDK's single-request upload
+    would re-introduce the live failure (large files cut off at ~8 s) while looking fine.
     """
     pipeline = getattr(getattr(client, "sources", None), "_uploader", None)
     needed = ("upload_file_streaming", "_client_factory", "_live_cookies", "_authuser_header",
               "_resolve_upload_timeout", "_track_transport_client", "_transport_clients")
-    if pipeline is None or not all(hasattr(pipeline, n) for n in needed):
-        return False
+    missing = [n for n in needed if pipeline is None or not hasattr(pipeline, n)]
+    if pipeline is None or missing:
+        raise Bili2nbError(
+            "SDK_INCOMPATIBLE",
+            "NotebookLM SDK 的上传管线结构与本工具验证过的不一致，已在发送任何文件之前停止"
+            "（不会退回不可靠的单请求上传）。",
+            detail="missing: " + (", ".join(missing) if pipeline is not None else "client.sources._uploader"),
+        )
     import httpx
     from notebooklm._web.sources import upload as sdk_upload
 
@@ -190,7 +197,6 @@ def install_chunked_upload(client, *, chunk_size: int = CHUNK_SIZE) -> bool:
                 pass
 
     pipeline.upload_file_streaming = streaming
-    return True
 
 
 def _size(file_obj: IO[bytes]) -> int:

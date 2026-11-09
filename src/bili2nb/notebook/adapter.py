@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import threading
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from bili2nb.errors import Bili2nbError
+from bili2nb.notebook import sdk_compat
 
 T = TypeVar("T")
 NOTEBOOK_URL = "https://notebooklm.google.com/notebook/{id}"
@@ -41,36 +43,60 @@ class SourceInfo:
     status: str  # READY / PROCESSING / ERROR / PREPARING / UNKNOWN
 
 
+_fresh_lock = threading.Lock()
+_fresh_depth = 0
+_fresh_orig_init = None
+
+
 @contextlib.contextmanager
 def _fresh_connections():
-    """Force a brand-new TCP connection for every request made inside the block.
+    """Force a brand-new TCP connection for every request made by SDK clients created inside.
 
     Live finding (Gate 4): libcurl silently RE-SENDS a POST when a *reused* keep-alive
     connection dies without a response. Google often processes the request and then drops the
-    connection, so non-idempotent calls got executed twice (duplicate empty notebooks 2 s
+    connection, so non-idempotent calls were executed twice (duplicate empty notebooks 2 s
     apart; a stuck twin source registered with every upload). `FRESH_CONNECT`+`FORBID_REUSE`
     remove that hidden retry; `scripts/probe_curl_post_retry.py` demonstrates 2 POSTs -> 1.
+
+    Scope (V1.1): only `CurlCffiAsyncClient` instances CREATED while the block is active get
+    the options (through the SDK's own `session_factory` hook). curl_cffi itself is not
+    patched, so any other curl_cffi user in the process is unaffected. The patch is reference-
+    counted under a lock: nested or concurrent blocks restore the original exactly once.
     """
+    global _fresh_depth, _fresh_orig_init
     try:
         import curl_cffi.requests as cr
         from curl_cffi import CurlOpt
-    except ImportError:  # httpx transport: no libcurl, nothing to do
+        from notebooklm import _curl_cffi_transport as transport
+    except ImportError:  # httpx transport / SDK without curl_cffi: nothing to control here
         yield
         return
-    orig = cr.AsyncSession
+    cls = transport.CurlCffiAsyncClient
+    with _fresh_lock:
+        if _fresh_depth == 0:
+            orig = cls.__init__
 
-    class _Fresh(orig):  # type: ignore[valid-type, misc]
-        def __init__(self, *a, **kw):
-            opts = dict(kw.get("curl_options") or {})
-            opts.update({CurlOpt.FRESH_CONNECT: 1, CurlOpt.FORBID_REUSE: 1})
-            kw["curl_options"] = opts
-            super().__init__(*a, **kw)
+            def fresh_session(**kw):
+                opts = dict(kw.pop("curl_options", None) or {})
+                opts.update({CurlOpt.FRESH_CONNECT: 1, CurlOpt.FORBID_REUSE: 1})
+                return cr.AsyncSession(curl_options=opts, **kw)
 
-    cr.AsyncSession = _Fresh
+            def init(self, *a, **kw):
+                if kw.get("session_factory") is None:  # an explicit caller factory always wins
+                    kw["session_factory"] = fresh_session
+                orig(self, *a, **kw)
+
+            _fresh_orig_init = orig
+            cls.__init__ = init
+        _fresh_depth += 1
     try:
         yield
     finally:
-        cr.AsyncSession = orig
+        with _fresh_lock:
+            _fresh_depth -= 1
+            if _fresh_depth == 0:
+                cls.__init__ = _fresh_orig_init
+                _fresh_orig_init = None
 
 
 def _sdk():
@@ -114,6 +140,15 @@ class NotebookAdapter:
     def __init__(self, storage_path: str | None = None, profile: str | None = None):
         self._storage_path = storage_path
         self._profile = profile
+        # Source ids THIS process registered/observed as stuck and could not delete yet. Callers
+        # (the importer) persist them in the job record via `drain_orphans()`.
+        self._pending_orphans: set[str] = set()
+
+    def drain_orphans(self) -> list[str]:
+        """Hand over (and forget) the ids of our own stuck sources that still need deleting."""
+        out = sorted(self._pending_orphans)
+        self._pending_orphans.clear()
+        return out
 
     @property
     def account_key(self) -> str:
@@ -167,6 +202,8 @@ class NotebookAdapter:
         (network/server error) we look for a NEW notebook with this title before failing,
         and never auto-retry an ambiguous create (that could make duplicate notebooks)."""
 
+        sdk_compat.require("create_notebook")  # stop BEFORE any cloud write if the SDK changed
+
         async def op(client):
             before = {n.id for n in await client.notebooks.list()}
             try:
@@ -206,98 +243,114 @@ class NotebookAdapter:
         title: str | None = None,
         *,
         reconcile_sec: float = 90.0,
+        owned=(),
     ) -> str:
         """Upload one file WITHOUT waiting for processing; returns the source id.
 
-        Idempotent + reconciling (observed live on 2026-11-08: the server often accepts a
-        file but the HTTP response is dropped, so the SDK raises NetworkError although the
-        source exists). Therefore:
+        Idempotent + reconciling (observed live: the server often accepts a file but the HTTP
+        response is dropped, so the SDK raises NetworkError although the source exists):
           1. if a usable source with the same filename/title already exists, reuse it;
-          2. on a network-class error, look the source up before ever re-uploading.
-        Never blind-retries. Orphans (registered but stuck PREPARING) are reported in the
-        error detail as `orphan_source_id=...` and are never reused.
+          2. on a network-class error, look the source up (up to `reconcile_sec`) before ever
+             re-uploading. This method itself never loops: it makes ONE add_file attempt.
+
+        Deleting stuck sources (PREPARING/ERROR) requires OWNERSHIP EVIDENCE, never just a
+        matching name (a same-named source may be the user's own):
+          * ids in `owned` (recorded in the job from an earlier attempt) or in this adapter's
+            pending list; and/or
+          * sources that appeared DURING this call (not in the pre-call snapshot), carry our
+            file name/title, and are stuck; and/or
+          * the id the SDK attached to its exception (`source_id`).
+        READY/PROCESSING sources are never deleted.
         """
+        sdk_compat.require("upload_file")  # stop BEFORE any cloud write if the SDK changed
         names = {path.name} | ({title} if title else set())
+        owned_ids = {*owned, *self._pending_orphans}
 
         async def op(client):
             if os.environ.get("BILI2NB_CHUNKED_UPLOAD", "1") != "0":
                 from .chunked_upload import install_chunked_upload
 
-                install_chunked_upload(client)  # short requests; see chunked_upload.py
+                install_chunked_upload(client)  # raises SDK_INCOMPATIBLE instead of degrading
             before = await client.sources.list(notebook_id)
-            # User-authorised (2026-11-08): remove ONLY our own stuck leftovers
-            # (same file name, PREPARING/ERROR). READY/PROCESSING and other files are untouched.
-            await self._delete_stuck(client, notebook_id, before, names)
+            before_ids = {s.id for s in before}
+            # (1) leftovers we can PROVE are ours from earlier attempts
+            await self._delete_owned(client, notebook_id, before, owned_ids)
             usable = [s for s in before if s.title in names and s.status.name in _USABLE]
             if usable:
                 return usable[0].id
-            known = {s.id for s in before}
             try:
                 src = await client.sources.add_file(notebook_id, path, title=title, wait=False)
-                # Live: each upload leaves an extra stuck registration (same name) behind.
-                with contextlib.suppress(Exception):
-                    twins = [s for s in await client.sources.list(notebook_id) if s.id != src.id]
-                    await self._delete_stuck(client, notebook_id, twins, names)
-                return src.id
             except net_errors() as exc:
-                found = await self._reconcile(client, notebook_id, names, known, reconcile_sec)
+                found = await self._reconcile(client, notebook_id, names, before_ids, reconcile_sec)
                 if found is not None and found.status.name in _USABLE:
                     return found.id
-                orphan = found.id if found is not None else getattr(exc, "source_id", None)
-                if orphan is None:
-                    # Nothing landed on the server: repeating is safe -> retryable code.
-                    raise Bili2nbError(
-                        "NETWORK_ERROR", "上传时连接中断，云端未收到该文件（可安全重试）。",
-                        detail=type(exc).__name__,
-                    ) from exc
-                # Registered but bytes never accepted: remove the stuck source we just made.
                 try:
-                    current = await client.sources.list(notebook_id)
+                    now = await client.sources.list(notebook_id)
                 except Exception:  # noqa: BLE001 - best effort
-                    current = []
-                deleted = await self._delete_stuck(
-                    client, notebook_id, current, names, extra_ids={orphan}
-                )
-                if orphan in deleted:
+                    now = []
+                evidence = {getattr(exc, "source_id", None)} - {None}
+                evidence |= {s.id for s in now if s.id not in before_ids and s.title in names}
+                _, failed = await self._delete_owned(client, notebook_id, now, evidence)
+                if failed:
+                    raise Bili2nbError(
+                        "UPLOAD_FAILED",
+                        "上传未完成（服务端断开连接，留下未能清理的未完成来源）。已避免重复上传；请使用 retry 重试。",
+                        detail=f"{type(exc).__name__} orphan_source_ids={','.join(sorted(failed))}",
+                        extra={"orphan_source_ids": sorted(failed)},
+                    ) from exc
+                if evidence:
                     raise Bili2nbError(
                         "NETWORK_ERROR", "上传时连接中断；已清理该次留下的未完成来源，可安全重试。",
-                        detail=f"{type(exc).__name__} orphan_deleted={orphan}",
+                        detail=f"{type(exc).__name__} orphan_deleted={','.join(sorted(evidence))}",
                     ) from exc
+                # Nothing of ours landed on the server: repeating is safe -> retryable code.
                 raise Bili2nbError(
-                    "UPLOAD_FAILED",
-                    "上传未完成（服务端断开连接，留下未完成的来源）。已避免重复上传；请使用 retry 重试。",
-                    detail=f"{type(exc).__name__} orphan_source_id={orphan}",
+                    "NETWORK_ERROR", "上传时连接中断，云端未收到该文件（可安全重试）。",
+                    detail=type(exc).__name__,
                 ) from exc
+            # Live: each upload leaves an extra stuck registration (same name) behind. It is ours
+            # because it appeared during THIS call.
+            with contextlib.suppress(Exception):
+                after = await client.sources.list(notebook_id)
+                twins = {s.id for s in after if s.id not in before_ids and s.id != src.id
+                         and s.title in names}
+                await self._delete_owned(client, notebook_id, after, twins)
+            return src.id
 
         return self._run(op, default="UPLOAD_FAILED", fresh=True)
 
-    @staticmethod
-    async def _delete_stuck(client, notebook_id, sources, names, *, extra_ids=frozenset()) -> list[str]:
-        """Best-effort delete of stuck (PREPARING/ERROR) sources that are ours: matching
-        file name/title or an explicitly named orphan id. Never touches READY/PROCESSING.
-        Returns the ids actually deleted; failures are swallowed (cleanup must not block)."""
+    async def _delete_owned(self, client, notebook_id, sources, owned_ids) -> tuple[list[str], list[str]]:
+        """Delete stuck (PREPARING/ERROR) sources whose id is in `owned_ids`. Never touches
+        READY/PROCESSING or anything else. Returns (deleted, failed); failed ids are remembered
+        in `_pending_orphans` so they can be persisted and retried. Cleanup never raises."""
         deleted: list[str] = []
+        failed: list[str] = []
         for s in sources:
-            if s.status.name not in _STUCK:
+            if s.id not in owned_ids or s.status.name not in _STUCK:
                 continue
-            if s.title not in names and s.id not in extra_ids:
-                continue
-            with contextlib.suppress(Exception):  # best effort
+            try:
                 await client.sources.delete(notebook_id, s.id)
                 deleted.append(s.id)
-        return deleted
+                self._pending_orphans.discard(s.id)
+            except Exception:  # noqa: BLE001 - best effort, but remember it
+                failed.append(s.id)
+                self._pending_orphans.add(s.id)
+        return deleted, failed
 
-    def cleanup_stuck(self, notebook_id: str, names: set[str]) -> list[str]:
-        """Delete our stuck leftovers (by file name) in one notebook; returns deleted ids."""
-        if not names:
+    def cleanup_owned(self, notebook_id: str, source_ids) -> list[str]:
+        """Delete recorded orphans of this job that are STILL stuck. Returns the ids that remain
+        (could not be deleted). Ids that vanished or became READY/PROCESSING are dropped, not deleted."""
+        ids = set(source_ids)
+        if not ids:
             return []
+        sdk_compat.require("cleanup_owned")
 
         async def op(client):
-            return await self._delete_stuck(
-                client, notebook_id, await client.sources.list(notebook_id), names
-            )
+            sources = await client.sources.list(notebook_id)
+            _, failed = await self._delete_owned(client, notebook_id, sources, ids)
+            return failed
 
-        return self._run(op, default="NETWORK_ERROR")
+        return self._run(op, default="NETWORK_ERROR", fresh=True)
 
     @staticmethod
     async def _reconcile(client, notebook_id, names, known, window_sec):

@@ -62,3 +62,22 @@ def test_security_policy_and_credential_docs_exist():
         assert needle in sec, f"SECURITY.md must mention {needle}"
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert "## 凭证与隐私" in readme and "SECURITY.md" in readme
+
+
+def test_every_error_code_is_documented_in_the_readme():
+    from bili2nb.errors import EXIT_CODES
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    for code in sorted(set(EXIT_CODES.values())):
+        assert re.search(rf"\|\s*{code}\s*\|", readme), f"exit code {code} missing from README table"
+
+
+def test_sdk_inventory_doc_covers_every_inventory_entry():
+    from bili2nb.notebook.sdk_compat import PINNED_SDK, PRIVATE_API_INVENTORY
+
+    doc = (ROOT / "docs" / "SDK_PRIVATE_API.md").read_text(encoding="utf-8")
+    assert PINNED_SDK in doc
+    for item in PRIVATE_API_INVENTORY:
+        key = item["api"].split("(")[0].split(":")[0].split(" / ")[0].strip()
+        key = key.replace("client.", "").replace("notebooklm._web.sources.upload", "").strip(" ,:")
+        assert key.split()[0][:25] in doc, f"docs/SDK_PRIVATE_API.md does not mention {item['api'][:50]}"

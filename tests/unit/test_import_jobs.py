@@ -38,6 +38,10 @@ class FakeNotebookLM:
         self.upload_failures: dict[str, list[BaseException]] = {}  # filename -> queue
         self.wait_failures: dict[str, list[BaseException]] = {}  # source title kind -> queue
         self.source_kind: dict[str, str] = {}  # source_id -> "audio"/"pdf"
+        self.pending_orphans: set[str] = set()  # ids a failed upload could not delete
+        self.undeletable: set[str] = set()
+        self.cleanup_calls: list[tuple[str, list[str]]] = []
+        self.owned_seen: list[tuple[str, ...]] = []
         self._n = 0
 
     def check_auth(self):
@@ -56,9 +60,18 @@ class FakeNotebookLM:
     def notebook_exists(self, nb):
         return nb in self.notebooks
 
-    def upload_file(self, nb, path, title=None):
+    def drain_orphans(self):
+        out, self.pending_orphans = sorted(self.pending_orphans), set()
+        return out
+
+    def cleanup_owned(self, nb, ids):
+        self.cleanup_calls.append((nb, list(ids)))
+        return [i for i in ids if i in self.undeletable]
+
+    def upload_file(self, nb, path, title=None, *, owned=()):
         name = Path(path).name
         self.upload_calls.append(name)
+        self.owned_seen.append(tuple(owned))
         q = self.upload_failures.get(name)
         if q:
             raise q.pop(0)
@@ -499,3 +512,36 @@ def test_non_retryable_error_is_not_backed_off(env):
     with pytest.raises(Bili2nbError) as e:
         env.run()
     assert e.value.code == "AUTH_REQUIRED" and env.sleeps == []
+
+
+# ---- V1.1: ownership evidence for orphan cleanup survives process restarts
+def test_orphans_reported_by_a_failed_upload_are_persisted_and_passed_back_on_retry(env):
+    env.nlm.pending_orphans = {"stuck-1"}
+    env.nlm.upload_failures["audio.m4a"] = [Bili2nbError("UPLOAD_FAILED", "disconnect")]
+    with pytest.raises(Bili2nbError) as e:
+        env.run()
+    job = env.store.get(e.value.extra["job_id"])
+    assert job.status == FAILED and job.orphans == ["stuck-1"]  # persisted evidence
+    assert job_to_dict(job)["orphan_source_ids"] == ["stuck-1"]
+    env.nlm.upload_failures.clear()
+    res = env.importer().retry(job.job_id)
+    assert res["status"] == COMPLETED
+    assert env.nlm.cleanup_calls == [(job.notebook_id, ["stuck-1"])]  # cleaned by recorded id only
+    assert env.store.get(job.job_id).orphans == []  # cleared once deleted
+
+
+def test_orphans_that_cannot_be_deleted_stay_recorded(env):
+    env.nlm.pending_orphans = {"stuck-9"}
+    env.nlm.undeletable = {"stuck-9"}
+    env.nlm.upload_failures["audio.m4a"] = [Bili2nbError("UPLOAD_FAILED", "disconnect")]
+    with pytest.raises(Bili2nbError) as e:
+        env.run()
+    jid = e.value.extra["job_id"]
+    env.nlm.upload_failures.clear()
+    env.importer().retry(jid)
+    assert env.store.get(jid).orphans == ["stuck-9"]  # still ours, retried next time
+
+
+def test_no_cleanup_call_when_the_job_recorded_no_orphans(env):
+    env.run()
+    assert env.nlm.cleanup_calls == []  # nothing is deleted without recorded evidence
