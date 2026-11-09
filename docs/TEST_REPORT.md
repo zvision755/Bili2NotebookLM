@@ -360,3 +360,10 @@ SceneDetect 失败 → 回退定时取帧并写 warning（单元测试覆盖）�
 局限：Windows 仅做了路径/提示的单元测试，未在 Windows 实机验证（ffmpeg、浏览器登录等）。尚未执行全局安装（`uv tool install .`），待用户执行或授权。
 
 **命令名更新（用户要求，2026-11-09）**：命令统一为 `bili2notebooklm`（与项目名一致；NotebookLM 虽已改名 Gemini Notebook，但大家仍习惯叫 NotebookLM），保留短别名 `bili2nb`，原 `bili2notebook` 已移除。上文验证用的是更名前的 `bili2notebook`，更名后重新做了真实安装验证（见下）。
+
+## 跨平台自动测试（GitHub Actions，2026-11-09）
+仓库已公开：https://github.com/zvision755/Bili2NotebookLM 。每次推送自动在 **macOS / Windows / Linux（ubuntu）** 三个云端环境各跑：`uv sync` → `ruff` → 离线 pytest（230 项）→ `doctor`；另有“安装成全局命令”冒烟测试（`uv tool install . --overrides overrides.txt` 后在项目外运行 `bili2nb --help`、`doctor`、`bili2nb <BV号>`）。最新提交 6/6 任务全部通过。
+CI 真实抓到并促成修复的 Windows 问题：① 离线测试守卫禁止了所有 `connect()`，而 Windows 的 asyncio 用回环 `connect()` 建事件循环，导致所有异步测试失败（现放行回环地址）；② Typer 在 GitHub Actions 强制带颜色码，拆开了帮助文字里的选项名；③ ffmpeg 安装提示、文件权限（0600）的断言是 macOS 专属。
+Windows CI 上 `bili2nb doctor` 实测：Python 3.12、ffmpeg 9.0.2、yt-dlp、opencv、notebooklm-py 0.8.6、中文字体可嵌入（simhei/msyh 之一）、工作目录 `%APPDATA%\Bili2NotebookLM` 均 OK；Google 登录为 WARN（CI 没有账号，符合预期）。
+**未覆盖**：Windows/Linux 上的真实 Google 浏览器登录、真实 NotebookLM 导入、真实 Bilibili 下载（云端 CI 不登录 Google，也未做真实下载）——需要在真实 Windows 电脑上由用户手动验证。
+公开前已清理：文档中的笔记本完整链接与本机路径；提交历史压缩为单个提交（提交身份使用 GitHub noreply 邮箱），未包含任何凭证。
