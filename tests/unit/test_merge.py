@@ -38,19 +38,43 @@ def test_same_codec_is_concatenated_without_re_encoding(tmp_path):
     am.decode_check(res.path)  # plays end-to-end
 
 
-def test_mixed_codecs_are_converted_to_one_aac_file(tmp_path):
-    a = _aac(tmp_path, "a.m4a", 2)
-    b = tmp_path / "b.mp3"
-    h.make_audio(b, 3, "mp3")
-    res = merge.merge_audio([a, b], tmp_path / "merged.m4a")
-    assert res.action == "transcode" and abs(res.duration - 5.0) <= 0.6
+def test_only_the_odd_file_is_re_encoded_when_the_majority_is_compatible(tmp_path):
+    """Real-world case: 29 of 30 parts were 44.1 kHz, one was 48 kHz."""
+    files = [_aac(tmp_path, f"a{i}.m4a", 2, 44100) for i in range(3)] + [_aac(tmp_path, "odd.m4a", 2, 48000)]
+    res = merge.merge_audio(files, tmp_path / "m.m4a")
+    assert res.action == "copy" and res.normalized == [3]
+    assert abs(res.duration - 8.0) <= 0.6 and len(res.offsets) == 4
+    assert [p.name for p in tmp_path.iterdir() if p.name.startswith(".")] == []  # scratch files removed
     am.decode_check(res.path)
 
 
-def test_mixed_sample_rates_are_normalised(tmp_path):
-    res = merge.merge_audio([_aac(tmp_path, "a.m4a", 2, 44100), _aac(tmp_path, "b.m4a", 2, 48000)],
-                            tmp_path / "m.m4a")
+def test_a_different_codec_is_normalised_to_the_majority(tmp_path):
+    a1, a2 = _aac(tmp_path, "a1.m4a", 2), _aac(tmp_path, "a2.m4a", 2)
+    b = tmp_path / "b.mp3"
+    h.make_audio(b, 3, "mp3")
+    res = merge.merge_audio([a1, a2, b], tmp_path / "merged.m4a")
+    assert res.action == "copy" and res.normalized == [2] and abs(res.duration - 7.0) <= 0.7
+    am.decode_check(res.path)
+
+
+def test_full_transcode_only_when_the_majority_codec_is_not_friendly(tmp_path):
+    fl = []
+    for i in range(2):
+        p = tmp_path / f"f{i}.flac"
+        h.make_audio(p, 2, "flac")
+        fl.append(p)
+    res = merge.merge_audio(fl, tmp_path / "m.m4a")
     assert res.action == "transcode" and abs(res.duration - 4.0) <= 0.6
+    am.decode_check(res.path)
+
+
+def test_transcode_bitrate_adapts_so_the_result_fits():
+    cap = 190 * 1024 * 1024
+    assert merge.pick_bitrate(600, cap) == 128                 # short: full quality
+    assert merge.pick_bitrate(11834, cap) <= 128               # 3.3 hours: still capped at 128
+    long = merge.pick_bitrate(20000, cap)                      # 5.5 hours: must go lower to fit
+    assert 48 <= long < 128 and 20000 * long * 1000 / 8 <= cap
+    assert merge.pick_bitrate(10**7, cap) == 48                # never below the floor
 
 
 def test_size_limit_is_enforced_and_no_partial_output_is_left(tmp_path):

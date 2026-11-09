@@ -24,6 +24,24 @@
 
 ---
 
+## V1.2 验证记录（本地分支 `v1.2`，2026-11-09；尚未推送、尚未跑 CI）
+
+| 项目 | 结论 | 证据 |
+|---|---|---|
+| 离线测试 | PASS（467 项） | `uv run pytest -q tests/unit`；Ruff 干净 |
+| 登录默认 Chromium（三平台一致、显式 chrome/msedge 透传、失败分类、回退只在交互时询问） | PASS（离线） | `tests/unit/test_login.py`（Mock 子进程，不启动浏览器、不访问 Google） |
+| 本机捆绑 Chromium 可启动 | PASS（仅 macOS 27 / arm64） | Chromium 156.0.8078.4，有窗口与无头模式均启动并渲染本地页面；未访问任何网站 |
+| Playwright 自带下载器在本机网络下失败 | 已记录（真实现象） | `playwright install chromium` 反复在 0% 报 "server closed connection"，curl 可下载同一文件；错误提示已覆盖重试/代理/改用 chrome 或 msedge |
+| 多 P 枚举（一次 API 调用取全部分 P；不退回 P1） | PASS（离线）+ 真实 | `tests/unit/test_parts.py`；真实视频 `BV1W64y147w7`（30 个分 P）一次取到全部 CID |
+| 真实 30 个分 P 的逐 P 转换（`--audio-only`，不登录） | PASS | 30/30 成功；30 个 CID 互不相同；各分 P 音频时长与元数据最大相差 1.1 s；顶层 manifest 30 项均为 done；无重复内容；音频合计 191.3 MB |
+| 真实 30 个分 P 的音频合并 | PASS | 多数派 44.1 kHz 直接复制，仅第 22 个（48 kHz）单独转换；13.4 s；188.8 MB（< 190 MiB 分组上限、< 200 MiB）；总时长 11833.9 s，与各 P 之和 11833.6 s 相差 0.3 s；整体解码通过。（初版实现整体重编码用时 141 s，真实数据暴露后改为"只转少数派"） |
+| 来源额度规划（逐 P / 合并 / 分组 / 不可行） | PASS（离线） | `tests/unit/test_planner.py`；真实 30 P 数据在额度 50 → 逐 P 30 个来源，额度 20 或 1 → 合并为 1 个来源 |
+| 多 P 导入引擎（1 个笔记本、重复导入复用、`--force-new`、P2 下载失败、P2 上传失败、Ctrl+C 恢复、超额合并、不可行在建本前失败、计划冻结、分 P 变化） | PASS（**仅 Mock NotebookLM**） | `tests/unit/test_multi_import.py`（25 项） |
+| 旧版（V1.0 / V1.1）任务库迁移与兼容 | PASS（离线） | `tests/unit/test_db_migration.py`；V1.1 的全部导入测试未改动即通过 |
+| GitHub Actions（含新增的三平台 Chromium 安装/启动任务） | **未运行**（分支未推送） | 待推送后填写 |
+| **真实 NotebookLM 多 P 导入**（读取真实 `source_limit`、真实来源命名与 READY） | **BLOCKED**（需要用户授权） | 目前只有 Mock 证据，**不能**视为真实验收 |
+| Windows / Linux 真实登录与导入；无 Chrome/Edge 的干净机器 | **BLOCKED** | 未验证 |
+
 ## 历史验证记录（按时间顺序）
 
 ## Gate 0 — 环境可用与项目初始化
