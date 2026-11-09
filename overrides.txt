@@ -1,0 +1,3 @@
+# scenedetect hard-requires opencv-python, which collides with opencv-python-headless (same cv2/ dir).
+# Used by: uv tool install . --overrides overrides.txt   (the marker never matches, so it is dropped)
+opencv-python; sys_platform == 'never'

@@ -1,0 +1,47 @@
+[project]
+name = "bili2nb"
+version = "0.1.0"
+description = "Bilibili video -> NotebookLM notebook (audio + keyframe PDF), local macOS CLI"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+  "typer>=0.12,<1",
+  "yt-dlp>=2026.1.1",
+  "notebooklm-py[browser,impersonate]==0.8.6",
+  "opencv-python-headless>=4.9",
+  "scenedetect>=0.6.4",
+  "pillow>=10",
+  "reportlab>=4,<5",
+  "pypdf>=4",
+]
+
+[project.scripts]
+bili2nb = "bili2nb.cli:app"
+bili2notebooklm = "bili2nb.cli:app"
+
+[tool.uv]
+# scenedetect hard-requires opencv-python, which collides with opencv-python-headless
+# (same cv2/ directory). Drop the GUI build: the marker below never matches.
+override-dependencies = ["opencv-python; sys_platform == 'never'"]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bili2nb"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["live: real network / NotebookLM tests, opt-in via --live"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/bili2nb/cli.py" = ["B008"]  # typer.Option defaults are the documented idiom

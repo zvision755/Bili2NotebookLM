@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install ffmpeg + a CJK TrueType font (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-wqy-microhei
+
+      - name: Install ffmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+
+      - name: Install ffmpeg (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg -y --no-progress
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Lint
+        run: uv run ruff check src tests
+
+      - name: Offline tests
+        run: uv run pytest -q
+
+      - name: Doctor (dev environment)
+        run: uv run bili2nb doctor
+        continue-on-error: true
+
+  install-as-tool:
+    # Mirrors the README install path: `uv tool install` into an isolated env, then run the
+    # global launcher from outside the project (no venv activation).
+    name: tool install / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install ffmpeg + a CJK TrueType font (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-wqy-microhei
+
+      - name: Install ffmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+      - name: Install ffmpeg (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg -y --no-progress
+      - name: uv tool install
+        run: uv tool install . --overrides overrides.txt
+      - name: Run the installed command from another directory
+        shell: bash
+        run: |
+          cd "$HOME"
+          export PATH="$(uv tool dir --bin):$PATH"
+          bili2nb --help
+          bili2notebooklm --help
+          bili2nb doctor || true
+          bili2nb doctor --json
+          bili2nb BV1VV4y1V7Pz --json </dev/null || echo "exit=$? (expected: not logged in)"

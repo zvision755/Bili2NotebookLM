@@ -1,0 +1,41 @@
+# secrets / credentials / sessions
+.env
+.env.*
+*credentials*
+storage_state*
+*cookies*
+*.pem
+*.key
+/.notebooklm/
+# runtime state & media
+*.sqlite
+*.sqlite3
+*.db
+/job-state/
+/jobs/*.json
+/media/
+/cache/
+/tmp/
+/output/
+/out/
+*.log
+/logs/
+*.m4a
+*.mp3
+*.opus
+*.mp4
+*.mkv
+*.webm
+*.flv
+*.wav
+*.pdf
+!tests/fixtures/*.pdf
+# python
+.venv/
+__pycache__/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.DS_Store
