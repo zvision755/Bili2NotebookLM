@@ -40,7 +40,7 @@
 | `--part` 范围/列表语法（`8-27`、`1,3,5`、`1-3,7`；V1.2.1） | PASS（**仅离线 / Mock**） | `tests/unit/test_part_selection.py`（71 项）：解析（合法/非法/去重/升序/越界）、子集任务键与 `BV_all`/单 P 键互不串用且对同一选择稳定、子集导入 1 笔记本 2N 来源、重复导入复用、`--force-new`、`PARTS_CHANGED`、`convert` 子集、不连续选择的合并标题、`--json` 纯净、非法写法在任何网络调用前报 `INVALID_URL`（退出码 10） |
 | 旧版（V1.0 / V1.1）任务库迁移与兼容 | PASS（离线） | `tests/unit/test_db_migration.py`；V1.1 的全部导入测试未改动即通过 |
 | GitHub Actions（含新增的三平台 Chromium 安装/启动任务） | PASS（14/14，草稿 PR #1，提交 `f544b8f`，运行 42663338976） | 5 个 `test`（Ubuntu 3.11/3.12、Windows 3.11/3.12、macOS 3.12）、4 个 `tool install`、README 逐字执行、负向对照，以及新增的 3 个 `bundled Chromium`：Ubuntu（xvfb 虚拟显示）、macOS、Windows 均输出 `OK: bundled Chromium 156.0.8078.4 launched`。注意：runner 自带 Chrome/Edge，这只证明捆绑 Chromium 可经本工具的安装路径装上并启动，**不**证明干净机器可登录 |
-| **真实 NotebookLM 多 P 导入**（读取真实 `source_limit`、真实来源命名与 READY） | **PASS（自动核对）；网页问答待用户反馈** | 2026-11-10 第三次真实运行（20 个分 P：`BV1z3NY66EY1` 的 P8–P27，`--part 8-27`）：1 个笔记本、40 个来源全部 READY、`source_limit`=300（server）、`per_part`、云端 40/40 标题与记录一致、幂等重跑 `reused: true`。前两次（2 P 视频）的 FAIL 与修复见下方“V-2 真实多 P 导入记录”；用户在网页里的问答结论见“V-2 第三次”小节 |
+| **真实 NotebookLM 多 P 导入**（读取真实 `source_limit`、真实来源命名与 READY） | **PASS**（自动核对 + 用户网页问答反馈“可以答对”） | 2026-11-10 第三次真实运行（20 个分 P：`BV1z3NY66EY1` 的 P8–P27，`--part 8-27`）：1 个笔记本、40 个来源全部 READY、`source_limit`=300（server）、`per_part`、云端 40/40 标题与记录一致、幂等重跑 `reused: true`。前两次（2 P 视频）的 FAIL 与修复见下方“V-2 真实多 P 导入记录”；用户网页问答反馈“可以答对”（概括反馈，见“V-2 第三次”小节） |
 | Windows / Linux 真实登录与导入；无 Chrome/Edge 的干净机器 | **BLOCKED** | 未验证 |
 
 ### V-2 真实多 P 导入记录（2026-11-10，用户逐次授权；真实 ID 不入库）
@@ -76,9 +76,25 @@
 | 耗时 | — | 总计 36 分 10 秒：转换 316 s（含下载）、建本 8 s、**上传 1617 s（约 27 分钟，占大头）**、等待 READY 217 s |
 | 过程中的瞬时错误 | 已自愈 | 上传 P15 PDF、P17 音频、P24 PDF 时各出现 1 次 `NETWORK_ERROR`，3 s 后按“先核对云端再重试”的逻辑重试成功，没有产生重复来源（40 个 ID 互不相同、云端恰好 40 个） |
 | 幂等重跑（同一命令） | PASS | `reused: true`，同一 `job_id` 与笔记本，`source_count` 仍为 40，来源 ID 集合不变；15 秒；`auth check` 笔记本数仍为 31 |
-| 用户在网页里的问答 | **待用户反馈**（见下） | — |
+| 用户在网页里的问答 | **PASS（用户概括反馈）** | 用户在该笔记本里问了 4 类问题（来源能否打开、语音内容题、画面信息点题、跨分 P 题），原话反馈：“可以答对”。**说明**：这是用户的概括性反馈，未逐题记录问题原文、答案正误细节，也未记录每个回答引用了哪些来源；因此只能确认“用户认为 4 类问题回答正确”，不能据此断言逐题全对或引用了正确来源 |
 
 账号里因此多了 **1 个测试笔记本**（31 个中的最后一个，标题以 `B站｜尚硅谷LangGraph教程` 开头），由用户自行删除；本验证未删除任何云端内容。
+
+## V1.2.2：`--merge-sources`（离线部分，2026-11-10）
+
+| 项目 | 结果 | 证据 |
+|---|---|---|
+| 单元测试 | **PASS** | 569 项全绿（原 549 + 新增 20：`tests/unit/test_merge_sources.py`）；`ruff check src tests scripts` 干净 |
+| 开关生效 | PASS | 3 个分 P、来源额度充足：`--merge-sources` → 2 个来源（`P01-P03｜音频`、`P01-P03｜关键帧PDF`），1 个笔记本；`upload_plan = {strategy: merged, merge_requested: true}` |
+| 默认不变 | PASS | 不加开关 → `per_part`、6 个来源、`merge_requested: false`；超额合并的旧路径不变 |
+| 单 P 忽略 | PASS | `--part 2` / `--part 2-2` 加开关 → 正常导入 2 个来源，日志恰好 1 行提示 |
+| 计划冻结 | PASS | 上传失败后改小账号额度再 `retry`，计划与 `merge_requested` 不变 |
+| 幂等键不变 | PASS | 先逐 P 再加开关 → `reused: true`、同一 job、仍 6 个来源，并提示 `--force-new`；先合并再不加开关同理；`--force-new` + 开关只新建 1 个笔记本 |
+| 大小上限 | PASS | 合并后每个来源 ≤ 190 MiB；600 MB 音频拆成 4 组，成员无丢失且保持顺序 |
+| 目录页 | PASS | 合并 PDF 目录页包含各分 P 及其在合并音频中的起始时间 |
+| CLI / `--json` | PASS | `import`/默认入口接受开关，stdout 仅一个 JSON 对象；`convert` 不接受（退出码 2）；旧任务无该字段时 `merge_requested` 显示为 false |
+
+B1 离线分析（预期）见 [V1.2_MERGE_SOURCES.md](V1.2_MERGE_SOURCES.md)。真实对比试验见“V-3 合并来源对比试验”（待执行）。
 
 ## 历史验证记录（按时间顺序）
 

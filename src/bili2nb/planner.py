@@ -2,7 +2,8 @@
 
 Pure logic (no files, no network). Strategy:
   per_part  every part uploads its own audio (+ its PDF when it has one)     -> used when it fits
-  merged    otherwise consecutive parts are merged into as FEW sources as the 200 MB file limit
+            (unless the user asked for --merge-sources)
+  merged    otherwise (or on request) consecutive parts are merged into as FEW sources as the 200 MB file limit
             allows (audio and PDF grouped independently)
   infeasible even that does not fit -> fail BEFORE creating any cloud resource (never a 2nd notebook)
 """
@@ -111,7 +112,10 @@ def plan_uploads(
     total_parts: int,
     limit_origin: str = "server",
     group_max: int | None = None,
+    merge: bool = False,
 ) -> dict:
+    """`merge=True` (`--merge-sources`): merge consecutive parts into the fewest sources even when the
+    quota would allow one source per part. The default (False) merges only when it must."""
     group_max = GROUP_MAX_BYTES if group_max is None else group_max
     legacy = total_parts == 1 and len(parts) == 1
 
@@ -129,8 +133,8 @@ def plan_uploads(
         if p.pdf_path:
             per_part.append(item(f"P{p.part:02d}:pdf", "pdf", [p.part], False, p.pdf_path,
                                  p.pdf_bytes, title_for(p, "pdf")))
-    base = {"source_limit": limit, "limit_origin": limit_origin}
-    if len(per_part) <= limit:
+    base = {"source_limit": limit, "limit_origin": limit_origin, "merge_requested": bool(merge)}
+    if len(per_part) <= limit and not merge:
         return {"strategy": "per_part", **base, "items": per_part}
 
     by_part = {p.part: p for p in parts}

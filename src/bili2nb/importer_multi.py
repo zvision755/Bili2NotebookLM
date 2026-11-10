@@ -32,7 +32,8 @@ class MultiPartMixin:
     # _preflight, _stage_notebook, _record_orphans, _notebook_alive, _execute, result, _file_ok.
 
     # ------------------------------------------------------------------ entry
-    def _run_multi(self, ref, infos, *, mode, frames_mode, audio_only, output, keep_files, force_new) -> dict:
+    def _run_multi(self, ref, infos, *, mode, frames_mode, audio_only, output, keep_files, force_new,
+                   merge_sources: bool = False) -> dict:
         video_id = infos[0].video_id
         total = infos[0].part_count
         picked = [i.part for i in infos]
@@ -52,6 +53,9 @@ class MultiPartMixin:
                     "为避免把来源放错位置，不会复用旧任务；请用 --force-new 重新导入。",
                     extra={"job_id": existing.job_id},
                 )
+            if merge_sources and not (existing.plan or {}).get("merge_requested", False):
+                self.log("注意：已有该选择的任务，沿用其原来源计划，--merge-sources 不会改变它；"
+                         "要按合并来源重新导入，请加 --force-new（会新建 1 个笔记本）。")
             if existing.status == COMPLETED:
                 if self._notebook_alive(existing):
                     gaps = self._cloud_gaps(existing)
@@ -74,7 +78,7 @@ class MultiPartMixin:
             video_key=key, account_key=account, mode=mode, url=ref.url,
             options={"frames_mode": frames_mode, "part": None, "audio_only": audio_only,
                      "output": output, "keep_files": keep_files, "multi": True,
-                     "selection": selection, "part_count": total},
+                     "selection": selection, "part_count": total, "merge_sources": merge_sources},
             video_id=video_id, video_title=series, duration_sec=sum(i.duration for i in infos),
         )
         job = self.store.update(
@@ -206,7 +210,8 @@ class MultiPartMixin:
                 for p in job.parts]
             plan = planner.plan_uploads(
                 files, limit=plan["source_limit"], video_title=job.video_title or "",
-                total_parts=len(job.parts), limit_origin=plan["limit_origin"])
+                total_parts=len(job.parts), limit_origin=plan["limit_origin"],
+                merge=bool(job.options.get("merge_sources")))
             self.log(f"上传计划：{plan['strategy']}，{len(plan['items'])} 个来源（账号上限 {plan['source_limit']}）")
             job = self.store.update(job.job_id, plan=plan)
         pending = [i for i in plan["items"] if i["merge"] and not i["source_id"] and not self._file_ok(i["path"])]

@@ -151,6 +151,16 @@ NotebookLM 每个笔记本有来源数量上限（免费账号目前是 50 个�
 2. 放不下：把**连续**的分 P 合并成尽量少的来源（音频、PDF 各自合并，单个合并文件 ≤ 190 MB），如 `P01-P05｜音频`、`P06-P10｜音频`。合并 PDF 带每个分 P 的书签，开头有目录页，列出各分 P 在合并音频里的起始时间。逐 P 的原文件仍保留在本地。
 3. 合并后仍超限：**在创建笔记本之前**报错（退出码 27），写明需要多少来源、上限是多少，建议用 `--part`（如 `--part 1-20`）缩小范围。**绝不会**自动拆成多个笔记本。
 
+**可选：`--merge-sources`**（只对一次选中 ≥ 2 个分 P 的 `import` 有意义，`convert` 没有）。来源数量放得下时默认仍是逐 P 上传；加上 `--merge-sources` 则无论是否超额，都把连续分 P 合并成尽量少的来源（音频、PDF 各自按单文件 ≤ 190 MiB 贪心分组，标题如 `P08-P27｜音频`，合并 PDF 的目录页列出各分 P 在合并音频里的起始时间）。
+
+```bash
+bili2nb BV1xxxxxxxxx --part 8-27 --merge-sources
+```
+
+- 它**不改变任务键**：同一视频、同一选择已有任务（不论是逐 P 还是合并导入的）就直接复用，不会重做；想按合并方式重新导入，请加 `--force-new`（会新建 1 个笔记本）。
+- 选中的分 P 只有 1 个时，开关被忽略并给一行提示。
+- 取舍：来源数少（上传的固定开销小、断点续传检查点少），但失败时重传的是整个大文件，且在 NotebookLM 里引用只会指向“合并音频”，要靠 PDF 目录页的时间点对应到具体分 P。是否更快见 [docs/V1.2_MERGE_SOURCES.md](docs/V1.2_MERGE_SOURCES.md)。
+
 ### 第一次使用：设置工作目录和 Google 登录
 
 第一次在终端里运行时会自动引导（也可以随时手动执行 `bili2notebooklm setup`）：
@@ -175,7 +185,7 @@ NotebookLM 每个笔记本有来源数量上限（免费账号目前是 50 个�
 bili2notebooklm convert BV1VV4y1V7Pz --output ./out      # 产物：audio.m4a、keyframes.pdf、manifest.json
 ```
 
-`convert` 与 `import` 一样：没指定 P 就处理全部分 P（每个分 P 一个子目录）。其他选项：`--part N|a-b|a,b,c`、`--frames auto|slides|scene|none`、`--audio-only`、`--keep-files`、`--force-new`（为同一视频另建一个笔记本）。
+`convert` 与 `import` 一样：没指定 P 就处理全部分 P（每个分 P 一个子目录）。其他选项：`--part N|a-b|a,b,c`、`--frames auto|slides|scene|none`、`--audio-only`、`--keep-files`、`--force-new`（为同一视频另建一个笔记本）；仅 `import`：`--merge-sources`（见上）。
 
 > Windows 说明：默认目录、ffmpeg 提示和登录流程已按 Windows 适配，但本项目目前只在 macOS 上做过真实验证；Windows 上若遇到问题请反馈。
 

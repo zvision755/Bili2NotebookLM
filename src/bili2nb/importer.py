@@ -101,8 +101,9 @@ class Importer(MultiPartMixin):
     # ------------------------------------------------------------ public API
     def run(self, url: str, *, frames_mode: str = "auto", part: int | str | None = None,
             audio_only: bool = False, output: str | None = None, keep_files: bool = False,
-            force_new: bool = False) -> dict:
-        """`part`: a part number or a `--part` spec (8 / 8-27 / 1,3,5 / 1-3,7); None = all parts."""
+            force_new: bool = False, merge_sources: bool = False) -> dict:
+        """`merge_sources`: merge consecutive parts into the fewest sources (multi-part only).
+        `part`: a part number or a `--part` spec (8 / 8-27 / 1,3,5 / 1-3,7); None = all parts."""
         ref, chosen, warnings = resolve_part(parse_url(url), part)  # bad spec fails before any network
         for w in warnings:
             self.log(w)
@@ -113,7 +114,9 @@ class Importer(MultiPartMixin):
         if len(infos) > 1:  # several parts (no ?p=): one notebook for ALL of them
             return self._run_multi(
                 ref, infos, mode=mode, frames_mode=frames_mode, audio_only=audio_only,
-                output=output, keep_files=keep_files, force_new=force_new)
+                output=output, keep_files=keep_files, force_new=force_new, merge_sources=merge_sources)
+        if merge_sources:
+            self.log("提示：只导入 1 个分 P，--merge-sources 无意义，已忽略。")
         info = infos[0]
         account = self.adapter.account_key
         existing = self.store.find_active(info.video_key, account, mode)
@@ -344,6 +347,7 @@ def job_to_dict(job: Job, *, reused: bool = False) -> dict:
         d["selection"] = job.options.get("selection", "all")
         d["parts"] = [{k: v for k, v in p.items() if k != "info"} for p in job.parts]
         d["upload_plan"] = {k: plan.get(k) for k in ("strategy", "source_limit", "limit_origin")}
+        d["upload_plan"]["merge_requested"] = bool(plan.get("merge_requested", False))
         d["sources"] = [
             {"key": i["key"], "kind": i["kind"], "parts": i["parts"], "title": i["title"],
              "merged": i["merge"], "bytes": i["bytes"], "source_id": i["source_id"], "ready": i["ready"]}

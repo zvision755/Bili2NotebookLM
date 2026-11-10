@@ -334,6 +334,13 @@ def import_(
     force_new: bool = typer.Option(
         False, "--force-new", help="Create another notebook for this video (exactly one, with the full part set)."
     ),
+    merge_sources: bool = typer.Option(
+        False, "--merge-sources",
+        help="Multi-part only: merge consecutive parts into the FEWEST sources (audio and PDF each in "
+        "groups of <=190 MiB) even if the account's source limit would allow one source per part. "
+        "Default: one source per part, merged only when over the limit. Does not change the job key: "
+        "an existing import of the same selection is reused; add --force-new to redo it merged.",
+    ),
     as_json: bool = typer.Option(False, "--json", help="Single JSON object on stdout."),
 ):
     """Convert and import into a NEW NotebookLM notebook (audio + keyframe PDF), wait until READY."""
@@ -344,6 +351,7 @@ def import_(
         return _make_importer().run(
             normalize_input(url), frames_mode=frames.value, part=part, audio_only=audio_only,
             output=str(output) if output else None, keep_files=keep_files, force_new=force_new,
+            merge_sources=merge_sources,
         )
 
     _emit(_guard(go, as_json), as_json)
