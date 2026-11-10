@@ -56,7 +56,8 @@ app = typer.Typer(
     cls=_DefaultImportGroup,
     help="Bilibili video -> NotebookLM (audio + keyframe PDF).\n\n"
     "Usage: bili2notebooklm <B站链接 或 BV号>   (first run guides you through setup)\n\n"
-    "Multi-part (分P) videos: all parts go into ONE notebook unless you pick one with ?p=N / --part N.",
+    "Multi-part (分P) videos: all parts go into ONE notebook unless you pick some with ?p=N or "
+    "--part (8, 8-27, 1,3,5, 1-3,7).",
     no_args_is_help=True,
 )
 auth_app = typer.Typer(help="NotebookLM authentication.", no_args_is_help=True)
@@ -222,6 +223,12 @@ def auth_check(as_json: bool = typer.Option(False, "--json", help="Single JSON o
         typer.echo(f"Auth OK (account has {n} notebooks).")
 
 
+_PART_HELP = (
+    "Only these parts (P) of a multi-part video: 8, a range 8-27, a list 1,3,5, or both 1-3,7. "
+    "A ?p=N in the URL wins."
+)
+
+
 class Frames(str, Enum):
     auto = "auto"
     slides = "slides"
@@ -234,8 +241,8 @@ def convert(
     url: str = typer.Argument(..., help="Bilibili video URL or BV number (bilibili.com or b23.tv)"),
     frames: Frames = typer.Option(Frames.auto, "--frames", help="Keyframe mode."),
     output: Path = typer.Option(None, "--output", help="Output root dir (default: app data dir)."),
-    part: int = typer.Option(
-        None, "--part", min=1, help="Only this part (P) of a multi-part video. Default: ALL parts."
+    part: str = typer.Option(
+        None, "--part", metavar="SPEC", help=_PART_HELP + " Default: ALL parts."
     ),
     audio_only: bool = typer.Option(False, "--audio-only", help="Audio only (same as --frames none)."),
     as_json: bool = typer.Option(False, "--json", help="Single JSON object on stdout."),
@@ -319,8 +326,8 @@ def import_(
     url: str = typer.Argument(..., help="Bilibili video URL (bilibili.com or b23.tv)"),
     frames: Frames = typer.Option(Frames.auto, "--frames", help="Keyframe mode."),
     output: Path = typer.Option(None, "--output", help="Keep imported files under this dir."),
-    part: int = typer.Option(
-        None, "--part", min=1, help="Only this part (P) of a multi-part video. Default: ALL parts, one notebook."
+    part: str = typer.Option(
+        None, "--part", metavar="SPEC", help=_PART_HELP + " Default: ALL parts, one notebook."
     ),
     audio_only: bool = typer.Option(False, "--audio-only", help="Audio source only (no PDF)."),
     keep_files: bool = typer.Option(False, "--keep-files", help="Keep local audio/PDF after success."),

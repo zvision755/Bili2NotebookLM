@@ -10,10 +10,11 @@ from pathlib import Path
 
 from bili2nb import layout, pipeline
 from bili2nb.bilibili import downloader as dl
-from bili2nb.bilibili.parser import VideoRef, parse_url
+from bili2nb.bilibili.parser import parse_url
 from bili2nb.config import default_output_root
 from bili2nb.errors import Bili2nbError
 from bili2nb.retry import with_backoff
+from bili2nb.selection import resolve_part, selection_label
 
 
 def _stderr(msg: str) -> None:
@@ -82,26 +83,22 @@ def convert_parts(
     *,
     output_root: Path | None = None,
     frames_mode: str = "auto",
-    part: int | None = None,
+    part: int | str | None = None,
     audio_only: bool = False,
     log: Callable[[str], None] = _stderr,
-    plan_fn: Callable[[VideoRef], list[dl.VideoInfo]] | None = None,
+    plan_fn: Callable[..., list[dl.VideoInfo]] | None = None,
     convert_fn: Callable[..., dict] | None = None,
     sleep: Callable[[float], None] = time.sleep,
     backoff_base: float = 3.0,
 ) -> dict:
-    ref = parse_url(url)
-    warnings: list[str] = []
-    if part is not None:
-        if ref.part is None:
-            ref = VideoRef(ref.video_id, part)
-        elif ref.part != part:
-            warnings.append(f"URL 已指定分 P={ref.part}，忽略 --part {part}。")
+    """`part` is a part number or a `--part` spec (8 / 8-27 / 1,3,5 / 1-3,7); None = all parts."""
+    ref, chosen, warnings = resolve_part(parse_url(url), part)  # validates BEFORE any network call
     log(f"解析视频信息: {ref.url}")
-    infos = (plan_fn or dl.plan_parts)(ref)
+    run_plan = plan_fn or dl.plan_parts
+    infos = run_plan(ref) if chosen is None else run_plan(ref, selection=chosen)
     total = infos[0].part_count if infos else 0
-    selection = "all" if ref.part is None else f"P{ref.part}"
-    log(f"共 {total} 个分 P，本次处理：{'全部' if ref.part is None else selection}（{len(infos)} 个）")
+    selection = selection_label([i.part for i in infos], total) if infos else "all"
+    log(f"共 {total} 个分 P，本次处理：{'全部' if selection == 'all' else selection}（{len(infos)} 个）")
     out_root = (output_root or default_output_root()).expanduser()
     run = convert_fn or pipeline.convert
     meta_rows = [{"part": i.part, "cid": i.cid, "title": i.part_title or i.title, "duration": i.duration}

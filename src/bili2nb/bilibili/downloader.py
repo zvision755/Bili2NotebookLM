@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -225,24 +226,28 @@ def _part_info(meta: VideoMeta, ref: VideoRef, page: dict, n: int, total: int) -
     )
 
 
-def plan_parts(ref: VideoRef) -> list[VideoInfo]:
-    """Resolve WHICH parts to process: the explicit ?p=N, else ALL parts. Never a silent P1.
+def plan_parts(ref: VideoRef, selection: Sequence[int] | None = None) -> list[VideoInfo]:
+    """Resolve WHICH parts to process: the explicit ?p=N, else `selection` (ascending part numbers),
+    else ALL parts. Never a silent P1.
 
-    One view-API call yields every part's cid/title/duration. If that API is unusable (down or
-    risk-controlled) and no part was requested, yt-dlp is only used to COUNT the parts; if even that
-    fails the user is told to pass --part N.
+    One view-API call yields every part's cid/title/duration, selected or not. If that API is unusable
+    (down or risk-controlled) and no part was requested, yt-dlp is only used to COUNT the parts; if even
+    that fails the user is told to pass --part. With an explicit selection yt-dlp is asked for those
+    parts only.
     """
     meta = fetch_video(ref.video_id)
     if meta.code not in (0, None) and meta.code not in _RISK_CODES:
         raise Bili2nbError(
             "VIDEO_UNAVAILABLE", f"视频不存在、已删除或不可见（B站返回 {meta.code}: {meta.message}）。"
         )
+    chosen = [ref.part] if ref.part else (sorted(set(selection)) if selection else None)
     pages = meta.pages
     if pages:
         total = len(pages)
-        if ref.part and ref.part > total:
-            raise Bili2nbError("VIDEO_UNAVAILABLE", f"该视频只有 {total} 个分 P，没有 P{ref.part}。")
-        wanted = [ref.part] if ref.part else list(range(1, total + 1))
+        beyond = [n for n in chosen or [] if n > total]
+        if beyond:
+            raise Bili2nbError("VIDEO_UNAVAILABLE", f"该视频只有 {total} 个分 P，没有 P{beyond[0]}。")
+        wanted = chosen or list(range(1, total + 1))
         infos: list[VideoInfo] = []
         for n in wanted:
             info = _part_info(meta, ref, pages[n - 1], n, total)
@@ -251,12 +256,13 @@ def plan_parts(ref: VideoRef) -> list[VideoInfo]:
             infos.append(info)
         return infos
     # View API gave no pages.
-    if ref.part:
-        return [fetch_info(ref)]
+    if chosen:
+        return [fetch_info(VideoRef(ref.video_id, n)) for n in chosen]
     try:
         total = _enumerate_with_ytdlp(ref)
     except Bili2nbError as e:
         raise Bili2nbError(
-            e.code, f"{e.message} 无法确定该视频共有多少分 P，请用 --part N 指定要处理的分 P。", detail=e.detail
+            e.code, f"{e.message} 无法确定该视频共有多少分 P，请用 --part 指定要处理的分 P（如 --part 3 或 --part 1-5）。",
+            detail=e.detail,
         ) from e
     return [fetch_info(VideoRef(ref.video_id, n)) for n in range(1, total + 1)]

@@ -44,7 +44,7 @@
 - --json （stdout 仅一个稳定 JSON 结果；日志和进度走 stderr）
 - --keep-files （import 成功后保留导入文件）
 - --force-new （明确指定允许为同一视频创建另一本笔记）
-- --part N （只处理多 P 视频中的第 N 个分 P，若 URL 已明确 ?p=N 则尊重 URL；**不指定时处理全部分 P**，不再默认只取 P1）
+- --part SPEC （只处理多 P 视频中的指定分 P：单个 `8`、范围 `8-27`、列表 `1,3,5` 或混合 `1-3,7`；若 URL 已明确 ?p=N 则尊重 URL；**不指定时处理全部分 P**，不再默认只取 P1）
 - --audio-only （等同 frames none，明确允许仅有音频来源）
 - --no-wait （可选后续优化；首版默认等待 NotebookLM 来源 ready）
 

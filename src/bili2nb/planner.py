@@ -48,8 +48,32 @@ def legacy_source_title(kind: str, video_title: str) -> str:
     return t if len(t) <= _TITLE_MAX else t[: _TITLE_MAX - 1] + "…"
 
 
+_LABEL_MAX = 40
+
+
 def _range(parts: list[int]) -> str:
-    return f"P{parts[0]:02d}-P{parts[-1]:02d}"
+    """Honest name of a group of parts: `P01-P05` only for truly consecutive numbers (and runs of 3+),
+    otherwise the members (`P01+P03+P05`, `P01-P04+P07`). Selections may skip parts."""
+    runs: list[str] = []
+    i = 0
+    while i < len(parts):
+        j = i
+        while j + 1 < len(parts) and parts[j + 1] == parts[j] + 1:
+            j += 1
+        if j - i >= 2:
+            runs.append(f"P{parts[i]:02d}-P{parts[j]:02d}")
+        else:
+            runs.extend(f"P{n:02d}" for n in parts[i:j + 1])
+        i = j + 1
+    return "+".join(runs)
+
+
+def _group_label(parts: list[int]) -> str:
+    """Source-title form of `_range`; keeps titles short for scattered selections."""
+    full = _range(parts)
+    if len(full) <= _LABEL_MAX:
+        return full
+    return f"P{parts[0]:02d}…P{parts[-1]:02d}（共{len(parts)}个分P）"
 
 
 def _pack(sized: list[tuple[int, int]], max_bytes: int) -> list[list[int]]:
@@ -73,7 +97,7 @@ def _infeasible(needed: int, limit: int, parts: list[PartFiles], audio: int, pdf
         "UPLOAD_PLAN_INFEASIBLE",
         f"这 {len(parts)} 个分 P 即使合并也需要至少 {needed} 个来源，超过账号的单笔记本来源上限 {limit}"
         f"（音频合计 {audio / MB:.0f} MB，PDF 合计 {pdf / MB:.0f} MB，单文件上限 200 MB）。"
-        "尚未创建任何 NotebookLM 笔记本。请用 --part N 缩小范围，或使用来源额度更高的账号。",
+        "尚未创建任何 NotebookLM 笔记本。请用 --part 缩小范围（如 --part 1-20），或使用来源额度更高的账号。",
         extra={"needed_sources": needed, "source_limit": limit, "part_count": len(parts),
                "audio_total_bytes": audio, "pdf_total_bytes": pdf},
     )
@@ -124,7 +148,7 @@ def plan_uploads(
             else:
                 items.append(item(f"{_range(members)}:{kind}", kind, members, True, None,
                                   sum(getter_size(by_part[m]) for m in members),
-                                  f"{_range(members)}｜{label}"))
+                                  f"{_group_label(members)}｜{label}"))
     if len(items) > limit:
         raise _infeasible(len(items), limit, parts, sum(p.audio_bytes for p in parts),
                           sum(p.pdf_bytes for p in parts))
@@ -144,6 +168,6 @@ def estimate_feasibility(durations: list[float], *, limit: int, group_max: int |
             "UPLOAD_PLAN_INFEASIBLE",
             f"{len(durations)} 个分 P 共 {sum(durations) / 3600:.0f} 小时，音频至少需要 {min_audio_sources} 个来源"
             f"（单文件 200 MB 上限），超过账号上限 {limit}。尚未下载或创建任何内容。"
-            "请用 --part N 缩小范围，或使用来源额度更高的账号。",
+            "请用 --part 缩小范围（如 --part 1-20），或使用来源额度更高的账号。",
             extra={"needed_sources": min_audio_sources, "source_limit": limit, "part_count": len(durations)},
         )

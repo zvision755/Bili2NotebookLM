@@ -22,6 +22,7 @@ from bili2nb.importer_multi import MultiPartMixin
 from bili2nb.jobs.db import COMPLETED, FAILED, INTERRUPTED, RUNNING, Job, JobStore
 from bili2nb.notebook.adapter import make_title, notebook_url
 from bili2nb.retry import MAX_ATTEMPTS, RETRYABLE, with_backoff  # noqa: F401  (re-exported)
+from bili2nb.selection import resolve_part
 
 
 def _stderr(msg: str) -> None:
@@ -42,7 +43,7 @@ class Importer(MultiPartMixin):
         *,
         convert_fn: Callable[..., dict] | None = None,
         fetch_info_fn: Callable[[VideoRef], dl.VideoInfo] | None = None,
-        plan_parts_fn: Callable[[VideoRef], list[dl.VideoInfo]] | None = None,
+        plan_parts_fn: Callable[..., list[dl.VideoInfo]] | None = None,
         sleep: Callable[[float], None] = time.sleep,
         log: Callable[[str], None] = _stderr,
         backoff_base: float = 3.0,
@@ -98,16 +99,17 @@ class Importer(MultiPartMixin):
         return self.store.update(job.job_id, timings=timings)
 
     # ------------------------------------------------------------ public API
-    def run(self, url: str, *, frames_mode: str = "auto", part: int | None = None,
+    def run(self, url: str, *, frames_mode: str = "auto", part: int | str | None = None,
             audio_only: bool = False, output: str | None = None, keep_files: bool = False,
             force_new: bool = False) -> dict:
-        ref = parse_url(url)
-        if part is not None and ref.part is None:
-            ref = VideoRef(ref.video_id, part)
+        """`part`: a part number or a `--part` spec (8 / 8-27 / 1,3,5 / 1-3,7); None = all parts."""
+        ref, chosen, warnings = resolve_part(parse_url(url), part)  # bad spec fails before any network
+        for w in warnings:
+            self.log(w)
         mode = "none" if audio_only else frames_mode
         self._preflight()
         self.log(f"解析视频信息: {ref.url}")
-        infos = self._plan_fn(ref)
+        infos = self._plan_fn(ref) if chosen is None else self._plan_fn(ref, selection=chosen)
         if len(infos) > 1:  # several parts (no ?p=): one notebook for ALL of them
             return self._run_multi(
                 ref, infos, mode=mode, frames_mode=frames_mode, audio_only=audio_only,
@@ -338,7 +340,8 @@ def job_to_dict(job: Job, *, reused: bool = False) -> dict:
     }
     if job.parts:
         plan = job.plan
-        d["part_count"] = len(job.parts)
+        d["part_count"] = job.options.get("part_count") or len(job.parts)  # the video's TOTAL
+        d["selection"] = job.options.get("selection", "all")
         d["parts"] = [{k: v for k, v in p.items() if k != "info"} for p in job.parts]
         d["upload_plan"] = {k: plan.get(k) for k in ("strategy", "source_limit", "limit_origin")}
         d["sources"] = [

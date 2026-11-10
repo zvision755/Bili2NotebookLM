@@ -28,7 +28,7 @@
 
 | 项目 | 结论 | 证据 |
 |---|---|---|
-| 离线测试 | PASS（478 项） | `uv run pytest -q tests/unit`；Ruff 干净 |
+| 离线测试 | PASS（549 项，其中 V1.2.1 的 `--part` 范围/列表 71 项） | `uv run pytest -q tests/unit`；Ruff 干净 |
 | 登录默认 Chromium（三平台一致、显式 chrome/msedge 透传、失败分类、回退只在交互时询问） | PASS（离线） | `tests/unit/test_login.py`（Mock 子进程，不启动浏览器、不访问 Google） |
 | 本机捆绑 Chromium 可启动 | PASS（仅 macOS 27 / arm64） | Chromium 156.0.8078.4，有窗口与无头模式均启动并渲染本地页面；未访问任何网站 |
 | Playwright 自带下载器在本机网络下失败 | 已记录（真实现象） | `playwright install chromium` 反复在 0% 报 "server closed connection"，curl 可下载同一文件；错误提示已覆盖重试/代理/改用 chrome 或 msedge |
@@ -37,6 +37,7 @@
 | 真实 30 个分 P 的音频合并 | PASS | 多数派 44.1 kHz 直接复制，仅第 22 个（48 kHz）单独转换；13.4 s；188.8 MB（< 190 MiB 分组上限、< 200 MiB）；总时长 11833.9 s，与各 P 之和 11833.6 s 相差 0.3 s；整体解码通过。（初版实现整体重编码用时 141 s，真实数据暴露后改为"只转少数派"） |
 | 来源额度规划（逐 P / 合并 / 分组 / 不可行） | PASS（离线） | `tests/unit/test_planner.py`；真实 30 P 数据在额度 50 → 逐 P 30 个来源，额度 20 或 1 → 合并为 1 个来源 |
 | 多 P 导入引擎（1 个笔记本、重复导入复用、`--force-new`、P2 下载失败、P2 上传失败、Ctrl+C 恢复、超额合并、不可行在建本前失败、计划冻结、分 P 变化） | PASS（**仅 Mock NotebookLM**） | `tests/unit/test_multi_import.py`（25 项） |
+| `--part` 范围/列表语法（`8-27`、`1,3,5`、`1-3,7`；V1.2.1） | PASS（**仅离线 / Mock**） | `tests/unit/test_part_selection.py`（71 项）：解析（合法/非法/去重/升序/越界）、子集任务键与 `BV_all`/单 P 键互不串用且对同一选择稳定、子集导入 1 笔记本 2N 来源、重复导入复用、`--force-new`、`PARTS_CHANGED`、`convert` 子集、不连续选择的合并标题、`--json` 纯净、非法写法在任何网络调用前报 `INVALID_URL`（退出码 10） |
 | 旧版（V1.0 / V1.1）任务库迁移与兼容 | PASS（离线） | `tests/unit/test_db_migration.py`；V1.1 的全部导入测试未改动即通过 |
 | GitHub Actions（含新增的三平台 Chromium 安装/启动任务） | PASS（14/14，草稿 PR #1，提交 `f544b8f`，运行 42663338976） | 5 个 `test`（Ubuntu 3.11/3.12、Windows 3.11/3.12、macOS 3.12）、4 个 `tool install`、README 逐字执行、负向对照，以及新增的 3 个 `bundled Chromium`：Ubuntu（xvfb 虚拟显示）、macOS、Windows 均输出 `OK: bundled Chromium 156.0.8078.4 launched`。注意：runner 自带 Chrome/Edge，这只证明捆绑 Chromium 可经本工具的安装路径装上并启动，**不**证明干净机器可登录 |
 | **真实 NotebookLM 多 P 导入**（读取真实 `source_limit`、真实来源命名与 READY） | **FAIL → 已修复，复验未通过（V-2 尚未 PASS）** | 2026-11-10 两次真实运行，见下方“V-2 真实多 P 导入记录”。首次运行暴露严重缺陷（已修复）；复验时 NotebookLM 把一个几乎无语音的分 P 音频处理为 ERROR，工具如实报失败。尚待用一个信息量大、有语音的 2–3 P 视频重新验证 |

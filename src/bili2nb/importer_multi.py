@@ -24,6 +24,7 @@ from bili2nb.errors import Bili2nbError
 from bili2nb.jobs.db import COMPLETED, Job
 from bili2nb.media import frames as frames_mod
 from bili2nb.media import merge as merge_mod
+from bili2nb.selection import selection_key, selection_label
 
 
 class MultiPartMixin:
@@ -33,7 +34,12 @@ class MultiPartMixin:
     # ------------------------------------------------------------------ entry
     def _run_multi(self, ref, infos, *, mode, frames_mode, audio_only, output, keep_files, force_new) -> dict:
         video_id = infos[0].video_id
-        key = f"{video_id}_all"  # never equal to a single-part key (BV_CID): no cross-reuse
+        total = infos[0].part_count
+        picked = [i.part for i in infos]
+        # BV_all for every part; BV_P8-27 / BV_P1-3+7 for a subset. Never equal to a single-part key
+        # (BV_CID) or to each other: no cross-reuse between different selections.
+        key = selection_key(video_id, picked, total)
+        selection = selection_label(picked, total)
         account = self.adapter.account_key
         existing = self.store.find_active(key, account, mode)
         if existing and not force_new:
@@ -67,7 +73,8 @@ class MultiPartMixin:
         job = self.store.create(
             video_key=key, account_key=account, mode=mode, url=ref.url,
             options={"frames_mode": frames_mode, "part": None, "audio_only": audio_only,
-                     "output": output, "keep_files": keep_files, "multi": True},
+                     "output": output, "keep_files": keep_files, "multi": True,
+                     "selection": selection, "part_count": total},
             video_id=video_id, video_title=series, duration_sec=sum(i.duration for i in infos),
         )
         job = self.store.update(
@@ -141,7 +148,7 @@ class MultiPartMixin:
     def _write_manifest(self, job: Job, parts: list[dict]) -> None:
         layout.write_batch_manifest(
             self._out_root(job) / job.video_id, video_id=job.video_id, title=job.video_title or "",
-            selection="all", parts=batch.rows_from_job_parts(parts))
+            selection=job.options.get("selection", "all"), parts=batch.rows_from_job_parts(parts))
 
     def _part_done(self, p: dict) -> bool:
         if p.get("convert") != "done" or not self._file_ok(p.get("audio_path")):

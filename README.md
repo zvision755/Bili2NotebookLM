@@ -114,7 +114,7 @@ bili2notebooklm --help
 ```bash
 bili2notebooklm "https://www.bilibili.com/video/BV1VV4y1V7Pz"   # 链接
 bili2notebooklm BV1VV4y1V7Pz                                    # 或只给 BV 号（也支持 av 号）
-bili2notebooklm BV1VV4y1V7Pz?p=3                                # 只处理第 3 个分 P（也可 --part 3）
+bili2notebooklm BV1VV4y1V7Pz?p=3                                # 只处理第 3 个分 P（也可 --part 3；还可 --part 8-27 选一段）
 bili2notebooklm --json --keep-files BV1VV4y1V7Pz                # 选项放前面也行
 ```
 
@@ -126,13 +126,21 @@ bili2notebooklm --json --keep-files BV1VV4y1V7Pz                # 选项放前�
 bili2nb BV1xxxxxxxxx            # 没有指定 P：处理这个视频的全部分 P，只建 1 个笔记本
 bili2nb "BV1xxxxxxxxx?p=3"      # 只处理 P3（链接里的 p 优先于 --part）
 bili2nb BV1xxxxxxxxx --part 3   # 同上
+bili2nb BV1xxxxxxxxx --part 8-27     # 只处理 P8 到 P27（共 20 个分 P），仍然只建 1 个笔记本
+bili2nb BV1xxxxxxxxx --part 1,3,5    # 只处理 P1、P3、P5
+bili2nb BV1xxxxxxxxx --part 1-3,7    # 混合写法：P1、P2、P3、P7
 bili2nb BV1xxxxxxxxx --audio-only   # 每个分 P 只上传音频
 ```
+
+`--part` 的写法：单个数字、范围 `a-b`、逗号列表，或它们的组合；重复的会去掉，并按升序处理。`0`、负数、倒序范围（`5-3`）、空项（`1,,2`）、字母等写法会直接报错（退出码 10，`INVALID_URL`），不会碰网络。链接里的 `?p=N` 始终优先于 `--part`。`convert` 与 `import` 用法一致。
+
+- 选了多个、但不是全部分 P：任务以所选集合为单位记忆（同一选择再次导入会复用原笔记本；换一个选择就是另一个任务、另一个笔记本）。只选 1 个分 P 与以前的 `--part N` 完全一样。选中了全部分 P 等同于不写 `--part`。
+- 来源标题里的 `P08｜…` 始终是视频里真实的分 P 序号；超额合并时，不连续的选择会写成 `P01+P03+P05` 这样的真实成员，而不是假装连续。
 
 - 一个 3 P 的视频会得到 1 个笔记本、6 个来源：`P01｜第一集｜音频`、`P01｜第一集｜关键帧PDF`、`P02｜…`。某个分 P 没有有效画面时，只上传它的音频并给出提示。
 - **先全部转换，再建笔记本**：所有分 P 都在本地转换、校验完、上传计划确认可行之后，才会在 NotebookLM 里创建笔记本。某个分 P 下载失败时云端什么都不会创建，已完成的分 P 下次直接复用（`bili2nb retry <job_id>`）。
 - 中断（Ctrl+C）或上传中途失败后 `retry` 只继续没完成的来源，不会重复建笔记本、不会重传已成功的来源。
-- 无法确定总分 P 数（B 站接口不可用）时，不会悄悄只处理 P1，而是报错并提示用 `--part N` 指定。
+- 无法确定总分 P 数（B 站接口不可用）时，不会悄悄只处理 P1，而是报错并提示用 `--part` 指定（如 `--part 3` 或 `--part 1-5`）。
 - 每个分 P 的产物独立保存在 `<输出目录>/<BV号>/P01_标题/`，顶层 `manifest.json` 记录全部分 P 的状态；`--force-new` 只会新建一个笔记本。
 
 ### 笔记本来源数量限制
@@ -141,7 +149,7 @@ NotebookLM 每个笔记本有来源数量上限（免费账号目前是 50 个�
 
 1. 放得下：每个分 P 各传音频和 PDF。
 2. 放不下：把**连续**的分 P 合并成尽量少的来源（音频、PDF 各自合并，单个合并文件 ≤ 190 MB），如 `P01-P05｜音频`、`P06-P10｜音频`。合并 PDF 带每个分 P 的书签，开头有目录页，列出各分 P 在合并音频里的起始时间。逐 P 的原文件仍保留在本地。
-3. 合并后仍超限：**在创建笔记本之前**报错（退出码 27），写明需要多少来源、上限是多少，建议用 `--part N` 缩小范围。**绝不会**自动拆成多个笔记本。
+3. 合并后仍超限：**在创建笔记本之前**报错（退出码 27），写明需要多少来源、上限是多少，建议用 `--part`（如 `--part 1-20`）缩小范围。**绝不会**自动拆成多个笔记本。
 
 ### 第一次使用：设置工作目录和 Google 登录
 
@@ -167,7 +175,7 @@ NotebookLM 每个笔记本有来源数量上限（免费账号目前是 50 个�
 bili2notebooklm convert BV1VV4y1V7Pz --output ./out      # 产物：audio.m4a、keyframes.pdf、manifest.json
 ```
 
-`convert` 与 `import` 一样：没指定 P 就处理全部分 P（每个分 P 一个子目录）。其他选项：`--part N`、`--frames auto|slides|scene|none`、`--audio-only`、`--keep-files`、`--force-new`（为同一视频另建一个笔记本）。
+`convert` 与 `import` 一样：没指定 P 就处理全部分 P（每个分 P 一个子目录）。其他选项：`--part N|a-b|a,b,c`、`--frames auto|slides|scene|none`、`--audio-only`、`--keep-files`、`--force-new`（为同一视频另建一个笔记本）。
 
 > Windows 说明：默认目录、ffmpeg 提示和登录流程已按 Windows 适配，但本项目目前只在 macOS 上做过真实验证；Windows 上若遇到问题请反馈。
 
