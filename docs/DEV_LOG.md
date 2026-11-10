@@ -100,3 +100,9 @@
 - 过程：先按“PDF 优先、音频逐 P”做了第一版并提交（`aa15e13`），随后按新要求整体替换为**对齐的均衡分组**：把分 P 切成 g 个大小相差 ≤ 1 的连续组，每组音频、PDF 各 1 个来源且边界一致，g 取使来源总数 ≤ 上限的最大值；组内合并文件超 190 MiB 则对半拆（音频与 PDF 一起）；无 PDF 的分 P 不进 PDF 来源；最少来源数仍超限则建本之前以退出码 27 失败。计划新增 `merge_mode`（`minimal` / `fewest`）、`merge_group_count`、`merge_group_sizes`；`--merge-sources` 不变。
 - 新增 `import --source-limit N`（N ≥ 2）：有效上限 = `min(账号上限, N)`，只更严；`limit_origin` 记为 `override`；非法值在任何网络调用之前报 `INVALID_URL`；已有同一选择的任务时沿用原计划并提示；不改变任务键。
 - 旧测试：`test_planner` 中三条断言“超限就并成最少”的测试按新语义重写；`test_multi_import::test_over_quota_merges_but_still_creates_one_notebook` 改为对齐分组（上限 4、3 个分 P → `P01+P02` 与 `P03` 各有音频和 PDF，共 4 个来源）并新增上限 2（一组）的端到端用例；其余见 `tests/unit/test_source_limit.py`。613 项离线测试全绿。
+
+## V1.2.4：导入后精确清理 + `bili2nb clean`（2026-11-10）
+- 起因：产品所有者要求"所有成功上传的内容不要继续保留在本地，整个任务结束并确认笔记本已添加全部来源后再清理"。旧实现 `rmtree(job.output_dir)` 在多 P 任务里会删掉整个 `<BV>/`，包括用户用 `convert` 生成、本次没选中的分 P；清理也不以云端核对为前提；失败 / 被取代任务的遗留文件无处清理。
+- 做法（TDD，新增 `tests/unit/test_cleanup.py` 26 项，全部离线、仅用 `tmp_path`）：新增 `bili2nb/cleanup.py`（精确范围、输出根内校验、符号链接跳过、失败只警告、批次清单重建）；`Importer._cleanup` 改为"仅当本次云端核对通过才清"——多 P 用 `_m_finalize` 的成功标记，单 P 新增只读 `list_sources` 核对；任务 JSON 新增 `cleanup`，普通输出一行说明释放空间；新增 `clean`（dry-run 默认、`--yes`、`--json`、可点名 job id）。
+- 旧测试：仅 `test_import_jobs.FakeNotebookLM.list_sources` 由恒返回 `[]` 改为返回真实存在的来源；其余不变。离线测试 639 项全绿，ruff 干净。
+- 未做：真实导入后的清理未在真实 NotebookLM 上观察；`clean` 不联网核对云端（核对未通过的任务只在点名 job id 时才删）。

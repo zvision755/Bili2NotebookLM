@@ -337,6 +337,7 @@ class MultiPartMixin:
             if it["source_id"] in untitled:
                 job = self._add_warning(
                     job, f"来源《{it['title']}》的标题未能设置，云端暂显示为文件名（内容不受影响）。")
+        self._cloud_verified.add(job.job_id)  # every recorded source is in the cloud: cleanup may run
         return job
 
     @staticmethod

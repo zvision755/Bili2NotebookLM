@@ -298,6 +298,13 @@ def _print_job(res: dict) -> None:
     for k in ("audio_path", "pdf_path"):
         if k in res:
             typer.echo(f"  {k:<9}: {res[k]}")
+    cl = res.get("cleanup") or {}
+    if cl.get("status") == "done":
+        from bili2nb.importer import human_bytes
+        typer.echo(f"  cleaned  : 已核对云端并清理本地文件，释放 {human_bytes(cl['freed_bytes'])}"
+                   + (f"（保留其它分 P：{len(cl['kept_other_parts'])} 个）" if cl.get("kept_other_parts") else ""))
+    elif cl.get("status") == "failed_verify":
+        typer.echo("  cleaned  : 云端核对未通过，本地文件已保留")
     if res.get("error_code"):
         typer.echo(f"  error    : {res['error_code']} - {res.get('error_message')}")
     for w in res.get("warnings", []):
@@ -397,3 +404,60 @@ def jobs(limit: int = typer.Option(20, "--limit", min=1, help="Max jobs to show.
     for j in rows:
         typer.echo(f"{j.job_id}  {j.status:<11} {j.stage:<16} {(j.notebook_id or '-')[:8]:<9} "
                    f"{(j.video_title or '')[:40]}")
+
+
+@app.command("clean")
+def clean(
+    job_id: str = typer.Argument(None, help="Only this job (also allows the newest failed job; see --help)."),
+    yes: bool = typer.Option(False, "--yes", help="Really delete. Default: only list (dry run)."),
+    as_json: bool = typer.Option(False, "--json", help="Single JSON object on stdout."),
+):
+    """Free leftover local files of finished/abandoned import jobs (dry run unless --yes).
+
+    Lists failed/interrupted jobs that a newer job replaced, and completed jobs whose files are still on
+    disk. Never touches running jobs, the newest failed job (`retry` needs it) unless you name its id,
+    or anything kept via --keep-files / --output."""
+    from bili2nb import cleanup as cl
+    from bili2nb.config import default_output_root
+    from bili2nb.importer import human_bytes
+
+    store = _make_store()
+    jobs_all = store.list(1_000_000)
+    root = default_output_root()
+    try:
+        entries = cl.plan_clean(jobs_all, root, job_id=job_id)
+    except KeyError:
+        raise _fail(Bili2nbError("JOB_NOT_FOUND", f"找不到任务 {job_id}。用 `bili2nb jobs` 查看。"), as_json) from None
+    freed = 0
+    if yes:
+        by_id = {j.job_id: j for j in jobs_all}
+        for e in entries:
+            if e["skipped"] or not e["removed"]:
+                continue
+            j = by_id[e["job_id"]]
+            res = cl.cleanup_job_files(j, root, protect=cl.protected_dirs(jobs_all, {j.job_id}, root))
+            e.update(removed=res["removed"], freed_bytes=res["freed_bytes"], warnings=res["warnings"],
+                     kept_other_parts=res["kept_other_parts"])
+            freed += res["freed_bytes"]
+            if res["status"] == "done":
+                store.update(j.job_id, files_cleaned=True)
+        total = freed
+    else:
+        total = sum(e["size_bytes"] for e in entries)
+    if as_json:
+        sys.stdout.write(json.dumps({"dry_run": not yes, "total_bytes": total, "jobs": entries},
+                                    ensure_ascii=False) + "\n")
+        return
+    if not entries:
+        typer.echo("没有可清理的本地文件。")
+        return
+    for e in entries:
+        note = f"  [{e['skipped']}]" if e["skipped"] else ""
+        size = e.get("freed_bytes", e["size_bytes"])
+        typer.echo(f"{e['job_id']}  {e['status']:<11} {human_bytes(size):>10}  {(e['video'] or '')[:40]}{note}")
+        for w in e.get("warnings", []):
+            typer.echo(f"  warning: {w}")
+    if yes:
+        typer.echo(f"已清理，释放 {human_bytes(total)}。")
+    else:
+        typer.echo(f"可释放 {human_bytes(total)}。这是预览；加 --yes 才会真正删除。")

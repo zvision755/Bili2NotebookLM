@@ -7,12 +7,12 @@ sources that already exist.
 
 from __future__ import annotations
 
-import shutil
 import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
 
+from bili2nb import cleanup as cleanup_mod
 from bili2nb import pipeline, planner
 from bili2nb.bilibili import downloader as dl
 from bili2nb.bilibili.parser import VideoRef, parse_url
@@ -60,6 +60,7 @@ class Importer(MultiPartMixin):
         self.sleep = sleep
         self.log = log
         self.backoff_base = backoff_base
+        self._cloud_verified: set[str] = set()  # job ids whose sources were confirmed in the cloud THIS run
 
     # ------------------------------------------------------------ helpers
     def _backoff(self, fn: Callable[[], object], what: str):
@@ -307,17 +308,61 @@ class Importer(MultiPartMixin):
         job = self.store.update(job.job_id, stage="ready")
         return self._tick(job, "ready", t0)
 
+    def _cloud_holds_sources(self, job: Job) -> bool:
+        """Read-only check that every recorded source is really in the notebook (single-part path;
+        multi-part jobs get the same guarantee from `_m_finalize`)."""
+        if job.parts:
+            return job.job_id in self._cloud_verified
+        want = set(job.sources.values())
+        if not job.notebook_id or not want:
+            return False
+        try:
+            have = {s.id: s for s in self._backoff(
+                lambda: self.adapter.list_sources(job.notebook_id), "verify sources")}
+        except Bili2nbError:
+            return False
+        return all(sid in have and have[sid].status != "ERROR" for sid in want)
+
+    def _set_cleanup(self, job: Job, info: dict) -> Job:
+        return self.store.update(job.job_id, options={**job.options, "cleanup": info})
+
     def _cleanup(self, job: Job) -> Job:
-        """Success only: drop local media unless the user asked to keep it."""
+        """After COMPLETED, and only once the cloud is confirmed to hold every recorded source:
+        remove exactly the local files this job used (see bili2nb.cleanup). Never fails the import."""
         opts = job.options
-        if opts.get("keep_files") or opts.get("output") or not job.output_dir:
-            return job
-        shutil.rmtree(job.output_dir, ignore_errors=True)
-        return self.store.update(job.job_id, files_cleaned=True)
+        empty = {"freed_bytes": 0, "removed": [], "kept_other_parts": []}
+        if opts.get("keep_files") or opts.get("output"):  # the user wants the files
+            return self._set_cleanup(job, {"status": "kept", **empty})
+        if not cleanup_mod.job_dirs(job):
+            return self._set_cleanup(job, {"status": "skipped", **empty})
+        if not self._cloud_holds_sources(job):
+            job = self._add_warning(job, "云端核对未通过，已保留本地文件（可稍后用 `bili2nb clean` 清理）。")
+            return self._set_cleanup(job, {"status": "failed_verify", **empty})
+        try:
+            res = cleanup_mod.cleanup_job_files(job, default_output_root())
+        except Exception as exc:  # noqa: BLE001 - a cleanup problem must never fail a finished import
+            job = self._add_warning(job, f"本地清理出错（已忽略）：{type(exc).__name__}")
+            return self._set_cleanup(job, {"status": "skipped", **empty})
+        for w in res.pop("warnings"):
+            job = self._add_warning(job, w)
+        res.pop("manifest", None)
+        job = self._set_cleanup(job, res)
+        if res["status"] == "done":
+            job = self.store.update(job.job_id, files_cleaned=True)
+            self.log(f"本地文件已清理，释放 {human_bytes(res['freed_bytes'])}。")
+        return job
 
     # ------------------------------------------------------------ output
     def result(self, job: Job, *, reused: bool = False) -> dict:
         return job_to_dict(job, reused=reused)
+
+
+def human_bytes(n: int) -> str:
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if n < 1024 or unit == "GiB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n} B"
 
 
 def job_to_dict(job: Job, *, reused: bool = False) -> dict:
@@ -340,6 +385,7 @@ def job_to_dict(job: Job, *, reused: bool = False) -> dict:
         "orphan_source_ids": list(job.orphans),
         "visual": job.visual,
         "files_cleaned": job.files_cleaned,
+        "cleanup": job.options.get("cleanup"),
         "attempts": job.attempts,
         "timings_sec": job.timings,
         "warnings": list(job.warnings),
