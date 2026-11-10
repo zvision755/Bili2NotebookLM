@@ -348,6 +348,9 @@ def job_to_dict(job: Job, *, reused: bool = False) -> dict:
         d["parts"] = [{k: v for k, v in p.items() if k != "info"} for p in job.parts]
         d["upload_plan"] = {k: plan.get(k) for k in ("strategy", "source_limit", "limit_origin")}
         d["upload_plan"]["merge_requested"] = bool(plan.get("merge_requested", False))
+        for k in ("merge_mode", "merge_group_sizes"):  # only merged plans carry them
+            if k in plan:
+                d["upload_plan"][k] = plan[k]
         d["sources"] = [
             {"key": i["key"], "kind": i["kind"], "parts": i["parts"], "title": i["title"],
              "merged": i["merge"], "bytes": i["bytes"], "source_id": i["source_id"], "ready": i["ready"]}

@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from bili2nb import planner
 from bili2nb.bilibili.downloader import VideoInfo
 from bili2nb.errors import Bili2nbError
 from bili2nb.importer import Importer, job_to_dict
@@ -277,20 +278,61 @@ def test_source_rejected_by_notebooklm_is_reuploaded_on_retry(env):
 
 
 # ------------------------------------------------------------------ quota
-def test_over_quota_merges_but_still_creates_one_notebook(env):
-    env.real_media = True
-    env.nlm.limit = 4  # 3 parts x 2 = 6 > 4
-    res = env.run()
-    assert res["upload_plan"]["strategy"] == "merged" and res["source_count"] == 2
-    assert env.nlm.titles == ["P01-P03｜音频", "P01-P03｜关键帧PDF"] and env.nlm.create_calls == 1
+def _pdf_text(env, title):
     from pypdf import PdfReader
-    merged_pdf = env.nlm.paths["P01-P03｜关键帧PDF"]
-    r = PdfReader(str(merged_pdf))
+    r = PdfReader(str(env.nlm.paths[title]))
+    return r, " ".join((r.pages[0].extract_text() or "").split())
+
+
+def test_over_quota_merges_only_the_pdfs_and_keeps_every_audio_per_part(env):
+    env.real_media = True
+    env.nlm.limit = 4  # 3 parts x 2 = 6 > 4 -> R=2: the three PDFs become ONE source, audio untouched
+    res = env.run()
+    plan = res["upload_plan"]
+    assert plan["strategy"] == "merged" and plan["merge_mode"] == "minimal" and res["source_count"] == 4
+    assert plan["merge_group_sizes"] == {"audio": [1, 1, 1], "pdf": [3]}
+    assert env.nlm.titles == ["P01｜第1集｜音频", "P02｜第2集｜音频", "P03｜第3集｜音频", "P01-P03｜关键帧PDF"]
+    assert env.nlm.create_calls == 1 and all(res["source_ready"].values())
+    r, idx = _pdf_text(env, "P01-P03｜关键帧PDF")
     assert len(r.pages) == 1 + 3 * 3  # index + 3 x (cover + 2 pages)
-    tops = [o.title for o in r.outline if not isinstance(o, list)]
-    assert tops[1:] == ["P01｜第1集", "P02｜第2集", "P03｜第3集"]
-    idx_text = r.pages[0].extract_text() or ""
-    assert "P03" in idx_text
+    assert [o.title for o in r.outline if not isinstance(o, list)][1:] == ["P01｜第1集", "P02｜第2集", "P03｜第3集"]
+    # audio was NOT merged: the index points at each part's own audio source instead of a time offset
+    assert "对应音频来源" in idx and "P02｜第2集｜音频" in idx and "开始" not in idx
+    assert sorted(f.name for f in (env.tmp / "out" / BV / "_merged").iterdir()) == ["P01-P03_keyframes.pdf"]
+
+
+def test_mixed_merge_pdf_index_uses_offsets_for_merged_audio_and_names_for_the_rest(env):
+    env.real_media = True
+    env.nlm.limit = 3  # R=3: PDFs -2 (one group), audio -1 -> [P01+P02] merged, P03 stays per part
+    res = env.run()
+    assert res["upload_plan"]["merge_group_sizes"] == {"audio": [2, 1], "pdf": [3]}
+    assert env.nlm.titles == ["P01+P02｜音频", "P03｜第3集｜音频", "P01-P03｜关键帧PDF"]
+    assert res["source_count"] == 3 and env.nlm.create_calls == 1
+    _r, idx = _pdf_text(env, "P01-P03｜关键帧PDF")
+    assert "P01 在音频《P01+P02｜音频》中从 00:00:00 开始" in idx
+    assert "P02 在音频《P01+P02｜音频》中从" in idx
+    assert "P03 对应音频来源《P03｜第3集｜音频》" in idx
+    assert env.nlm.paths["P01+P02｜音频"].is_file()
+
+
+def test_over_quota_rerun_reuses_the_job_and_parts_change_is_still_detected(env):
+    env.real_media = True
+    env.nlm.limit = 4
+    first = env.run()
+    again = env.run()
+    assert again["job_id"] == first["job_id"] and env.nlm.create_calls == 1 and len(env.nlm.titles) == 4
+    env.infos = make_infos(4)
+    with pytest.raises(Bili2nbError) as ei:
+        env.run()
+    assert ei.value.code == "PARTS_CHANGED" and env.nlm.create_calls == 1
+
+
+def test_infeasible_when_even_the_minimum_does_not_fit_creates_nothing(env, monkeypatch):
+    env.nlm.limit = 4
+    monkeypatch.setattr(planner, "GROUP_MAX_BYTES", 1)  # nothing can share a file: 6 sources needed
+    with pytest.raises(Bili2nbError) as ei:
+        env.run()
+    assert ei.value.code == "UPLOAD_PLAN_INFEASIBLE" and env.nlm.create_calls == 0
 
 
 def test_merged_group_split_by_size_still_one_notebook(env, monkeypatch):

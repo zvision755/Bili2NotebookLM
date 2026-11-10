@@ -3,8 +3,9 @@
 Pure logic (no files, no network). Strategy:
   per_part  every part uploads its own audio (+ its PDF when it has one)     -> used when it fits
             (unless the user asked for --merge-sources)
-  merged    otherwise (or on request) consecutive parts are merged into as FEW sources as the 200 MB file limit
-            allows (audio and PDF grouped independently)
+  merged    over the quota: consecutive parts are merged JUST ENOUGH to fit the quota ("minimal": PDFs first, as
+            they are small and cheap to re-upload on a flaky link, audio only when PDFs alone cannot do it);
+            on request (--merge-sources) into as FEW sources as the 200 MB file limit allows ("fewest")
   infeasible even that does not fit -> fail BEFORE creating any cloud resource (never a 2nd notebook)
 """
 
@@ -93,6 +94,59 @@ def _pack(sized: list[tuple[int, int]], max_bytes: int) -> list[list[int]]:
     return groups
 
 
+def _split_even(seq: list, g: int) -> list[list]:
+    """Cut a sequence into `g` consecutive chunks whose sizes differ by at most 1 (larger chunks first)."""
+    q, r = divmod(len(seq), g)
+    out, i = [], 0
+    for k in range(g):
+        n = q + (1 if k < r else 0)
+        out.append(seq[i:i + n])
+        i += n
+    return out
+
+
+def _groups_for(sized: list[tuple[int, int]], g: int, max_bytes: int) -> list[list[int]]:
+    """`g` near-even consecutive groups of parts; a group over the byte cap is split again by size."""
+    if not sized:
+        return []
+    sizes = dict(sized)
+    out: list[list[int]] = []
+    for chunk in _split_even([part for part, _ in sized], g):
+        if sum(sizes[m] for m in chunk) > max_bytes and len(chunk) > 1:
+            out.extend(_pack([(m, sizes[m]) for m in chunk], max_bytes))
+        else:
+            out.append(chunk)
+    return out
+
+
+def _minimal_groups(
+    sized: dict[str, list[tuple[int, int]]], limit: int, max_bytes: int,
+) -> dict[str, list[list[int]]] | None:
+    """Fewest merges that bring the total source count within `limit`; PDFs are merged before audio.
+
+    Stage 1: audio stays one source per part, PDFs go from "none merged" down to one group.
+    Stage 2: PDFs sit at their minimum, audio goes from "none merged" down to its minimum.
+    The first (least merged) candidate that fits wins. None when nothing fits."""
+    audio, pdf = sized["audio"], sized["pdf"]
+
+    def candidate(ga: int, gp: int) -> dict[str, list[list[int]]]:
+        return {"audio": _groups_for(audio, ga, max_bytes), "pdf": _groups_for(pdf, gp, max_bytes)}
+
+    def fits(c: dict[str, list[list[int]]]) -> bool:
+        return len(c["audio"]) + len(c["pdf"]) <= limit
+
+    for gp in range(len(pdf), 0, -1):
+        c = candidate(len(audio), gp)
+        if fits(c):
+            return c
+    gp_min = 1 if pdf else 0
+    for ga in range(len(audio) - 1, 0, -1):
+        c = candidate(ga, gp_min)
+        if fits(c):
+            return c
+    return None
+
+
 def _infeasible(needed: int, limit: int, parts: list[PartFiles], audio: int, pdf: int) -> Bili2nbError:
     return Bili2nbError(
         "UPLOAD_PLAN_INFEASIBLE",
@@ -138,13 +192,25 @@ def plan_uploads(
         return {"strategy": "per_part", **base, "items": per_part}
 
     by_part = {p.part: p for p in parts}
-    items: list[dict] = []
-    for kind, getter_path, getter_size, label in (
+    kinds = (
         ("audio", lambda p: p.audio_path, lambda p: p.audio_bytes, "音频"),
         ("pdf", lambda p: p.pdf_path, lambda p: p.pdf_bytes, "关键帧PDF"),
-    ):
-        sized = [(p.part, getter_size(p)) for p in parts if getter_path(p)]
-        for members in _pack(sized, group_max):
+    )
+    sized = {kind: [(p.part, getter_size(p)) for p in parts if getter_path(p)]
+             for kind, getter_path, getter_size, _ in kinds}
+    fewest = _fewest_groups(sized, group_max)
+    if merge:
+        chosen, mode = fewest, "fewest"
+        if sum(len(g) for g in chosen.values()) > limit:
+            raise _too_many(chosen, limit, parts)
+    else:
+        chosen, mode = _minimal_groups(sized, limit, group_max), "minimal"
+        if chosen is None:
+            raise _too_many(fewest, limit, parts)
+
+    items: list[dict] = []
+    for kind, getter_path, getter_size, label in kinds:
+        for members in chosen[kind]:
             if len(members) == 1:
                 p = by_part[members[0]]
                 items.append(item(f"P{p.part:02d}:{kind}", kind, members, False, getter_path(p),
@@ -153,10 +219,17 @@ def plan_uploads(
                 items.append(item(f"{_range(members)}:{kind}", kind, members, True, None,
                                   sum(getter_size(by_part[m]) for m in members),
                                   f"{_group_label(members)}｜{label}"))
-    if len(items) > limit:
-        raise _infeasible(len(items), limit, parts, sum(p.audio_bytes for p in parts),
-                          sum(p.pdf_bytes for p in parts))
-    return {"strategy": "merged", **base, "items": items}
+    return {"strategy": "merged", **base, "merge_mode": mode,
+            "merge_group_sizes": {k: [len(g) for g in chosen[k]] for k in ("audio", "pdf")}, "items": items}
+
+
+def _fewest_groups(sized: dict[str, list[tuple[int, int]]], max_bytes: int) -> dict[str, list[list[int]]]:
+    return {kind: _pack(sized[kind], max_bytes) for kind in ("audio", "pdf")}
+
+
+def _too_many(fewest: dict[str, list[list[int]]], limit: int, parts: list[PartFiles]) -> Bili2nbError:
+    return _infeasible(sum(len(g) for g in fewest.values()), limit, parts,
+                       sum(p.audio_bytes for p in parts), sum(p.pdf_bytes for p in parts))
 
 
 def estimate_feasibility(durations: list[float], *, limit: int, group_max: int | None = None) -> None:
