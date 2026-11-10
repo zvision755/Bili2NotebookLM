@@ -40,7 +40,7 @@
 | `--part` 范围/列表语法（`8-27`、`1,3,5`、`1-3,7`；V1.2.1） | PASS（**仅离线 / Mock**） | `tests/unit/test_part_selection.py`（71 项）：解析（合法/非法/去重/升序/越界）、子集任务键与 `BV_all`/单 P 键互不串用且对同一选择稳定、子集导入 1 笔记本 2N 来源、重复导入复用、`--force-new`、`PARTS_CHANGED`、`convert` 子集、不连续选择的合并标题、`--json` 纯净、非法写法在任何网络调用前报 `INVALID_URL`（退出码 10） |
 | 旧版（V1.0 / V1.1）任务库迁移与兼容 | PASS（离线） | `tests/unit/test_db_migration.py`；V1.1 的全部导入测试未改动即通过 |
 | GitHub Actions（含新增的三平台 Chromium 安装/启动任务） | PASS（14/14，草稿 PR #1，提交 `f544b8f`，运行 42663338976） | 5 个 `test`（Ubuntu 3.11/3.12、Windows 3.11/3.12、macOS 3.12）、4 个 `tool install`、README 逐字执行、负向对照，以及新增的 3 个 `bundled Chromium`：Ubuntu（xvfb 虚拟显示）、macOS、Windows 均输出 `OK: bundled Chromium 156.0.8078.4 launched`。注意：runner 自带 Chrome/Edge，这只证明捆绑 Chromium 可经本工具的安装路径装上并启动，**不**证明干净机器可登录 |
-| **真实 NotebookLM 多 P 导入**（读取真实 `source_limit`、真实来源命名与 READY） | **FAIL → 已修复，复验未通过（V-2 尚未 PASS）** | 2026-11-10 两次真实运行，见下方“V-2 真实多 P 导入记录”。首次运行暴露严重缺陷（已修复）；复验时 NotebookLM 把一个几乎无语音的分 P 音频处理为 ERROR，工具如实报失败。尚待用一个信息量大、有语音的 2–3 P 视频重新验证 |
+| **真实 NotebookLM 多 P 导入**（读取真实 `source_limit`、真实来源命名与 READY） | **PASS（自动核对）；网页问答待用户反馈** | 2026-11-10 第三次真实运行（20 个分 P：`BV1z3NY66EY1` 的 P8–P27，`--part 8-27`）：1 个笔记本、40 个来源全部 READY、`source_limit`=300（server）、`per_part`、云端 40/40 标题与记录一致、幂等重跑 `reused: true`。前两次（2 P 视频）的 FAIL 与修复见下方“V-2 真实多 P 导入记录”；用户在网页里的问答结论见“V-2 第三次”小节 |
 | Windows / Linux 真实登录与导入；无 Chrome/Edge 的干净机器 | **BLOCKED** | 未验证 |
 
 ### V-2 真实多 P 导入记录（2026-11-10，用户逐次授权；真实 ID 不入库）
@@ -60,6 +60,25 @@
 账号里因此留下 **2 个测试笔记本**（标题 `B站｜哥哥变成企鹅了怎么办？`；一个缺 P02，一个的 P02 音频为 ERROR），由用户自行删除；本验证未删除任何云端内容。
 
 **结论**：V-2 目前**不能标 PASS**。已验证的真实事实：账号 `source_limit` 真实读到（300/server）；修复后多 P 来源确实逐个上传并获得不同 ID；工具在 NotebookLM 拒绝一个来源时如实失败。待验证：换用有大量语音、画面为幻灯片/代码的 2–3 P 视频，做到 1 个笔记本、全部来源 READY、标题为 `P01｜…｜音频` 形式、幂等重跑 `reused: true`。
+
+### V-2 第三次：20 个分 P 的真实导入（2026-11-10，用户明确同意；真实 ID 不入库）
+
+测试视频：`BV1z3NY66EY1`（尚硅谷 LangGraph 教程，132 个分 P、约 21.3 小时；只取 **P8–P27 共 20 集**，“入门基础”，总时长 10586 s ≈ 2.94 h，音频合计 122.8 MB）。这次同时验证了新的 `--part 8-27` 范围语法。
+
+| 步骤 | 结论 | 证据 |
+|---|---|---|
+| 只读核对 | PASS | `fetch_video` 取到 132 个分 P；P8–P27 共 20 个，时长之和 10586 s |
+| 本地演练（`convert --part 8-27`，不登录） | PASS | 20/20 成功，5 分 26 秒；20 个分 P 子目录（`P008_…`–`P027_…`）；manifest `selection=P8-27`、20 项 done；各分 P 音频时长与元数据最多差约 1 s（如 P8 429 vs 428.7 s）；关键帧 PDF 共 48 MB |
+| 关键帧质量（如实观察） | 可用 | 每集 4–34 张截图（P9 4 张、P13 34 张、P18 31 张）；1280×720 原生分辨率，抽看 P9（HTML 运行图演示）与 P17（Typora 笔记，含代码块与参数说明）均清晰可读。相邻页近似重复仅 4 对（P14 三对、P22 一对）；没有发现明显漏掉的关键画面，但只抽看了两集，未逐页核对 |
+| 导入前后笔记本数 | PASS | `auth check`：30 → 31（恰好 +1） |
+| 真实导入 `bili2nb BV1z3NY66EY1 --part 8-27 --json` | **PASS** | exit 0，stdout 仅一个 JSON 对象；`status=completed`、`selection=P8-27`、`part_count=132`、`source_count=40`、`mode=frames:auto`、`attempts=1`、`warnings=[]`；`upload_plan = {per_part, source_limit 300, limit_origin server}`；40 个来源 ID 互不相同、全部 READY；来源标题均为 `P08｜…｜音频` / `P08｜…｜关键帧PDF` 形式，P08–P27 各 2 个；任务键 `BV1z3NY66EY1_P8-27` |
+| 云端核对（只读） | PASS | 列出笔记本来源：40 个、状态全为 READY、ID 集合与任务记录一致、40/40 标题与记录一致；没有来源被处理为 ERROR |
+| 耗时 | — | 总计 36 分 10 秒：转换 316 s（含下载）、建本 8 s、**上传 1617 s（约 27 分钟，占大头）**、等待 READY 217 s |
+| 过程中的瞬时错误 | 已自愈 | 上传 P15 PDF、P17 音频、P24 PDF 时各出现 1 次 `NETWORK_ERROR`，3 s 后按“先核对云端再重试”的逻辑重试成功，没有产生重复来源（40 个 ID 互不相同、云端恰好 40 个） |
+| 幂等重跑（同一命令） | PASS | `reused: true`，同一 `job_id` 与笔记本，`source_count` 仍为 40，来源 ID 集合不变；15 秒；`auth check` 笔记本数仍为 31 |
+| 用户在网页里的问答 | **待用户反馈**（见下） | — |
+
+账号里因此多了 **1 个测试笔记本**（31 个中的最后一个，标题以 `B站｜尚硅谷LangGraph教程` 开头），由用户自行删除；本验证未删除任何云端内容。
 
 ## 历史验证记录（按时间顺序）
 
