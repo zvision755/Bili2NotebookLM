@@ -223,3 +223,24 @@ def test_each_part_uploads_a_file_with_a_unique_name_and_staging_is_cleaned(tmp_
                  and p.name in names]
     assert leftovers == []  # staged links removed; the original audio.m4a files stay untouched
     assert len(list((tmp_path / "out").rglob("audio.m4a"))) == 2
+
+
+# ------------------------------------------------ V-4 (2026-11-10): stuck stub left by a dropped upload
+def test_sweep_deletes_only_stuck_stubs_that_carry_one_of_our_upload_file_names(monkeypatch):
+    sources = LiveLikeSources()
+    keep = sources._put("P113-P117｜音频")                       # recorded & READY
+    stub = sources._put("P113-P117_audio.m4a", status="PREPARING")  # left by an earlier dropped upload
+    users = sources._put("notes.pdf", status="PREPARING")          # someone else's stuck file
+    ready_same_name = sources._put("P118-P122_audio.m4a")          # READY: never touched
+    a = real_adapter(monkeypatch, sources)
+    deleted = a.sweep_stuck_stubs("nb", {keep.id}, {"P113-P117_audio.m4a", "P118-P122_audio.m4a"})
+    assert deleted == [stub.id]
+    assert set(sources.items) == {keep.id, users.id, ready_same_name.id}
+
+
+def test_sweep_never_raises_and_never_deletes_recorded_sources(monkeypatch):
+    sources = LiveLikeSources()
+    rec = sources._put("P01-P06_audio.m4a", status="PREPARING")  # recorded id: protected
+    a = real_adapter(monkeypatch, sources)
+    assert a.sweep_stuck_stubs("nb", {rec.id}, {"P01-P06_audio.m4a"}) == []
+    assert rec.id in sources.items

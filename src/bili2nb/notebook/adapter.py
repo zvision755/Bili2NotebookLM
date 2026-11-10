@@ -423,6 +423,34 @@ class NotebookAdapter:
 
         return self._run(op, default="NETWORK_ERROR")
 
+    def sweep_stuck_stubs(self, notebook_id: str, keep_ids, file_names) -> list[str]:
+        """Delete stuck (PREPARING/ERROR) registrations left behind by a dropped upload that a
+        later attempt could not prove were ours (live V-4, 2026-11-10: one `P113-P117_audio.m4a`
+        stub survived a retried upload and stayed PREPARING, counting against the source quota).
+
+        Ownership evidence = the cloud title is EXACTLY the local file name this job uploaded
+        (merged-group and staged per-part names are unique to the job) AND the source is stuck
+        AND it is not one of the ids the job recorded. READY/PROCESSING and everything else are
+        never touched. Best effort: never raises; returns the ids actually deleted."""
+        keep, names = set(keep_ids), set(file_names)
+        if not names:
+            return []
+
+        async def op(client):
+            deleted: list[str] = []
+            for s in await client.sources.list(notebook_id):
+                if s.id in keep or s.title not in names or s.status.name not in _STUCK:
+                    continue
+                with contextlib.suppress(Exception):
+                    await client.sources.delete(notebook_id, s.id)
+                    deleted.append(s.id)
+            return deleted
+
+        try:
+            return self._run(op, default="NETWORK_ERROR")
+        except Exception:  # noqa: BLE001 - cosmetic/quota hygiene must not fail a finished import
+            return []
+
     def wait_ready(self, notebook_id: str, source_id: str, timeout: float = 600.0) -> SourceInfo:
         """Block until the source is READY; raises SOURCE_NOT_READY on error/timeout."""
 

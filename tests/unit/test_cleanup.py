@@ -344,3 +344,18 @@ def test_clean_does_not_touch_anything_outside_the_output_root(cenv):
 
 def test_clean_with_nothing_to_do_says_so(cenv):
     assert "没有可清理" in invoke().output
+
+
+def test_finalize_sweeps_stuck_stubs_of_this_job_and_warns(env):
+    seen = {}
+
+    def sweep(nb, keep_ids, names):
+        seen["keep"], seen["names"] = set(keep_ids), set(names)
+        return ["stub-1"]
+
+    env.nlm.sweep_stuck_stubs = sweep
+    res = run_default(env)
+    job = env.store.get(res["job_id"])
+    assert job.status == COMPLETED
+    assert seen["keep"] == set(job.sources.values()) and seen["names"]
+    assert any("残留" in w for w in job.warnings)

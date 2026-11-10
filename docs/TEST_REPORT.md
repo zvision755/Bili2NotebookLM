@@ -470,3 +470,34 @@ SceneDetect 失败 → 回退定时取帧并写 warning（单元测试覆盖）�
 - CI 实际抓到并促成修复的 Windows 问题：① 离线测试守卫禁止了所有 `connect()`，而 Windows 的 asyncio 用回环 `connect()` 建事件循环，导致所有异步测试失败（现放行回环地址）；② Typer 在 GitHub Actions 强制带颜色码，拆开了帮助文字里的选项名；③ ffmpeg 安装提示、文件权限（0600）的断言是 macOS 专属。
 - Windows CI 上 `bili2nb doctor` 实测：Python、ffmpeg、yt-dlp、opencv、notebooklm-py、中文字体（可嵌入）、工作目录（`%APPDATA%\Bili2NotebookLM`）均 OK；Google 登录为 WARN（CI 没有账号，符合预期）。
 - **未覆盖**：Windows / Linux 上的真实 Google 浏览器登录、真实 NotebookLM 导入、真实 B 站下载。
+
+## V-4：免费额度模拟（`--source-limit 50`）：`BV1z3NY66EY1` 全部 132 个分 P（真实 NotebookLM，2026-11-10，用户授权的这一次）
+
+命令：`bili2nb BV1z3NY66EY1 --source-limit 50 --json`（不带 `--keep-files` / `--output`）。用户账号实际上限为 300（Pro），本次按免费账号（50）模拟。
+前提偏差（如实记录）：任务设想复用 P8–P27 的本地缓存，但开跑前 `output/BV1z3NY66EY1/` 已不存在（此前成功导入后的精确清理已删除），所以 **132 个分 P 全部重新下载**（磁盘剩余约 120 GiB，高于 15 GiB 停止线）。
+
+**结论：导入本身 PASS；同时发现并修复 1 个缺陷（见下）；用户网页问答反馈待填。**
+
+| 项目 | 结果 |
+|---|---|
+| 任务 | exit 0，`completed`，`attempts=1`，`reused=false`，`part_count=132`，`selection=all`，总时长 21.28 小时（76609 秒） |
+| 计划 | `upload_plan = {strategy: merged, source_limit: 50, limit_origin: override, merge_mode: minimal, merge_group_count: 25}`；组大小 7 组×6 + 18 组×5；音频与 PDF 分组边界一致，覆盖 P1–P132 且不重叠 |
+| 来源 | 记录 50 个，全部 `READY`，`orphan_source_ids=[]`；标题形如 `P01-P06｜音频` / `P01-P06｜关键帧PDF`；最大单个来源 56.6 MiB（≤190 MiB），合计 1241 MiB |
+| 笔记本数 | 前 30 → 后 31（恰好 +1） |
+| 云端独立读回（只读 SDK） | 云端共 51 个来源：记录的 50 个 id 与标题全部吻合且 `READY`；**多出 1 个**卡在 `PREPARING` 的残留（标题 `P113-P117_audio.m4a`），见缺陷 |
+| 耗时 | 总 7813 秒（约 2 小时 10 分）：转换 2566 秒（含下载 132 个分 P）、建本 8 秒、上传 4679 秒、等 READY 300 秒；其余为核对与清理 |
+| 吞吐 | 约 1241 MiB / 4679 秒 ≈ 0.27 MiB/s（约 2.1 Mbit/s，含逐个来源的往返与重试） |
+| 网络错误 | 上传中 4 次瞬时 `NETWORK_ERROR`（P37-P42 音频、P103-P107 PDF、P113-P117 音频、P128-P132 音频），均在第 1 次退避重试内自愈；无 B 站 412 / 限速；无需 `retry` |
+| 视觉 warning | P84、P124 画面变化很少，已补充定时取帧 |
+| 清理 | `cleanup.status=done`，`freed_bytes=2,600,819,316`，移除 135 项（132 个分 P 目录等），`kept_other_parts=[]`；`output/BV1z3NY66EY1/` 已不存在，其它视频目录未动。上传阶段输出目录抽样峰值约 2.4 GB。`df` 前后对比（可用 120.4 → 138.5 GiB）受本机其它进程影响，不能归因于清理，仅以 `freed_bytes` 为准 |
+| 幂等复跑 | 同一命令再跑：17 秒，`reused: true`，笔记本数仍为 31 |
+| 未验证 | 合并 PDF 的目录页（本地文件已被清理，未在本次再读）；请见用户网页检查 |
+
+### 发现并修复的缺陷：上传中断残留的 PREPARING 空壳来源不会被清掉
+- 现象：云端笔记本多出 1 个 `PREPARING` 空壳（`P113-P117_audio.m4a`，创建于 P113-P117 音频第一次上传 NETWORK_ERROR 的时刻）。程序自己的核对只检查"记录的来源都在"，所以仍报成功。免费账号若已有 50 个来源，这个空壳会占用额度。
+- 根因：失败那次尝试没有拿到所有权证据（`GET_NOTEBOOK` 连接错误，事后列表/对账没拿到空壳）；重试时空壳已在上传前快照里，`before` 里的卡住来源只有在 `owned` 里才删，且"上传期间新出现"的判断又把它排除在外。
+- 修复（先写失败测试，3 项）：`NotebookAdapter.sweep_stuck_stubs`——收尾核对后，只删**卡住状态（PREPARING/ERROR）、不在任务记录里、且标题恰好等于本任务上传过的文件名**的来源；READY/PROCESSING 与其它来源绝不碰；尽力而为，不会让已完成的导入失败；删了会加一条 warning。离线测试 642 项通过，ruff 干净。
+- **未处理**：这次真实笔记本里已存在的那个空壳**没有删除**（"不删除任何来源"的约束），修复只对之后的运行生效，需用户决定。
+
+### 用户网页验证反馈
+（待填）

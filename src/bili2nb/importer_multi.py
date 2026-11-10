@@ -337,6 +337,17 @@ class MultiPartMixin:
             if it["source_id"] in untitled:
                 job = self._add_warning(
                     job, f"来源《{it['title']}》的标题未能设置，云端暂显示为文件名（内容不受影响）。")
+        sweep = getattr(self.adapter, "sweep_stuck_stubs", None)
+        if sweep:  # a dropped upload can leave a stuck stub that still counts against the quota
+            names = set()
+            for it in plan["items"]:
+                if it["path"]:
+                    base = Path(it["path"]).name
+                    names.add(base if it["merge"] else f"P{it['parts'][0]:02d}_{base}")
+            gone = sweep(nb, set(want), names) or []
+            if gone:
+                job = self._add_warning(
+                    job, f"已清理 {len(gone)} 个上传中断时残留的未完成来源（本任务自己的，非 READY）。")
         self._cloud_verified.add(job.job_id)  # every recorded source is in the cloud: cleanup may run
         return job
 
