@@ -33,7 +33,7 @@ class MultiPartMixin:
 
     # ------------------------------------------------------------------ entry
     def _run_multi(self, ref, infos, *, mode, frames_mode, audio_only, output, keep_files, force_new,
-                   merge_sources: bool = False) -> dict:
+                   merge_sources: bool = False, source_limit: int | None = None) -> dict:
         video_id = infos[0].video_id
         total = infos[0].part_count
         picked = [i.part for i in infos]
@@ -53,6 +53,9 @@ class MultiPartMixin:
                     "为避免把来源放错位置，不会复用旧任务；请用 --force-new 重新导入。",
                     extra={"job_id": existing.job_id},
                 )
+            if source_limit is not None and (existing.plan or {}).get("limit_origin") != "override":
+                self.log("注意：已有该选择的任务，沿用其原来源计划，--source-limit 不会改变它；"
+                         "要按模拟的来源上限重新导入，请加 --force-new（会新建 1 个笔记本）。")
             if merge_sources and not (existing.plan or {}).get("merge_requested", False):
                 self.log("注意：已有该选择的任务，沿用其原来源计划，--merge-sources 不会改变它；"
                          "要按合并来源重新导入，请加 --force-new（会新建 1 个笔记本）。")
@@ -71,14 +74,15 @@ class MultiPartMixin:
         elif existing:
             self.store.supersede(existing.job_id)
 
-        limit, origin, warn = self._source_limit()
+        limit, origin, warn = self._source_limit(source_limit)
         planner.estimate_feasibility([i.duration for i in infos], limit=limit)  # before any download
         series = infos[0].series_title or infos[0].title
         job = self.store.create(
             video_key=key, account_key=account, mode=mode, url=ref.url,
             options={"frames_mode": frames_mode, "part": None, "audio_only": audio_only,
                      "output": output, "keep_files": keep_files, "multi": True,
-                     "selection": selection, "part_count": total, "merge_sources": merge_sources},
+                     "selection": selection, "part_count": total, "merge_sources": merge_sources,
+                     "source_limit": source_limit},
             video_id=video_id, video_title=series, duration_sec=sum(i.duration for i in infos),
         )
         job = self.store.update(
@@ -124,7 +128,17 @@ class MultiPartMixin:
                 "audio_path": None, "pdf_path": None, "visual": {}, "dir": None,
                 "audio_bytes": 0, "pdf_bytes": 0}
 
-    def _source_limit(self) -> tuple[int, str, str | None]:
+    def _source_limit(self, override: int | None = None) -> tuple[int, str, str | None]:
+        """Account limit, optionally made STRICTER by `--source-limit` (to rehearse a smaller account)."""
+        limit, origin, warn = self._account_limit()
+        if override is not None:
+            if override < limit:
+                self.log(f"--source-limit：按 {override} 个来源规划（账号实际上限 {limit}）。")
+                return override, "override", warn
+            self.log(f"提示：--source-limit {override} 不小于账号上限 {limit}，没有效果（只会更严，不会放宽）。")
+        return limit, origin, warn
+
+    def _account_limit(self) -> tuple[int, str, str | None]:
         fn = getattr(self.adapter, "source_limit", None)
         if fn is None:
             return planner.DEFAULT_SOURCE_LIMIT, "default", None

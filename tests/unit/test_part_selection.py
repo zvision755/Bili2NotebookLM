@@ -277,8 +277,7 @@ def test_subset_over_quota_merges_with_an_honest_title(env):
     env.real_media = True  # merging needs real, probe-able audio and PDFs
     res = env.run(part="1,3,5")
     assert res["upload_plan"]["strategy"] == "merged"
-    # R=3: the PDFs fold into one source, audio only loses one source -> [P01+P03] merged, P05 per part
-    assert {s["title"] for s in res["sources"]} == {"P01+P03｜音频", "P05｜第5集｜音频", "P01+P03+P05｜关键帧PDF"}
+    assert {s["title"] for s in res["sources"]} == {"P01+P03+P05｜音频", "P01+P03+P05｜关键帧PDF"}
     assert env.nlm.create_calls == 1
 
 

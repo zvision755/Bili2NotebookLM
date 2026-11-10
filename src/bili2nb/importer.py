@@ -13,7 +13,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from bili2nb import pipeline
+from bili2nb import pipeline, planner
 from bili2nb.bilibili import downloader as dl
 from bili2nb.bilibili.parser import VideoRef, parse_url
 from bili2nb.config import default_output_root
@@ -101,9 +101,12 @@ class Importer(MultiPartMixin):
     # ------------------------------------------------------------ public API
     def run(self, url: str, *, frames_mode: str = "auto", part: int | str | None = None,
             audio_only: bool = False, output: str | None = None, keep_files: bool = False,
-            force_new: bool = False, merge_sources: bool = False) -> dict:
+            force_new: bool = False, merge_sources: bool = False,
+            source_limit: int | str | None = None) -> dict:
         """`merge_sources`: merge consecutive parts into the fewest sources (multi-part only).
-        `part`: a part number or a `--part` spec (8 / 8-27 / 1,3,5 / 1-3,7); None = all parts."""
+        `part`: a part number or a `--part` spec (8 / 8-27 / 1,3,5 / 1-3,7); None = all parts.
+        `source_limit`: pretend the account allows at most this many sources (never looser than the real limit)."""
+        source_limit = planner.parse_source_limit(source_limit)  # bad value fails before any network
         ref, chosen, warnings = resolve_part(parse_url(url), part)  # bad spec fails before any network
         for w in warnings:
             self.log(w)
@@ -114,7 +117,10 @@ class Importer(MultiPartMixin):
         if len(infos) > 1:  # several parts (no ?p=): one notebook for ALL of them
             return self._run_multi(
                 ref, infos, mode=mode, frames_mode=frames_mode, audio_only=audio_only,
-                output=output, keep_files=keep_files, force_new=force_new, merge_sources=merge_sources)
+                output=output, keep_files=keep_files, force_new=force_new, merge_sources=merge_sources,
+                source_limit=source_limit)
+        if source_limit is not None:
+            self.log("提示：只导入 1 个分 P，--source-limit 无意义，已忽略。")
         if merge_sources:
             self.log("提示：只导入 1 个分 P，--merge-sources 无意义，已忽略。")
         info = infos[0]
@@ -348,7 +354,7 @@ def job_to_dict(job: Job, *, reused: bool = False) -> dict:
         d["parts"] = [{k: v for k, v in p.items() if k != "info"} for p in job.parts]
         d["upload_plan"] = {k: plan.get(k) for k in ("strategy", "source_limit", "limit_origin")}
         d["upload_plan"]["merge_requested"] = bool(plan.get("merge_requested", False))
-        for k in ("merge_mode", "merge_group_sizes"):  # only merged plans carry them
+        for k in ("merge_mode", "merge_group_sizes", "merge_group_count"):  # only merged plans carry them
             if k in plan:
                 d["upload_plan"][k] = plan[k]
         d["sources"] = [

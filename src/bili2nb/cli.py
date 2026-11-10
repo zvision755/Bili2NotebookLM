@@ -341,6 +341,12 @@ def import_(
         "Default: one source per part, merged only when over the limit. Does not change the job key: "
         "an existing import of the same selection is reused; add --force-new to redo it merged.",
     ),
+    source_limit: str = typer.Option(
+        None, "--source-limit", metavar="N",
+        help="Testing aid: plan as if the account allowed at most N sources per notebook (N >= 2), e.g. "
+        "--source-limit 50 to rehearse a free account's limit when merging parts. Only ever stricter than "
+        "the real limit; does not change the job key (an existing import of the same selection is reused).",
+    ),
     as_json: bool = typer.Option(False, "--json", help="Single JSON object on stdout."),
 ):
     """Convert and import into a NEW NotebookLM notebook (audio + keyframe PDF), wait until READY."""
@@ -351,7 +357,7 @@ def import_(
         return _make_importer().run(
             normalize_input(url), frames_mode=frames.value, part=part, audio_only=audio_only,
             output=str(output) if output else None, keep_files=keep_files, force_new=force_new,
-            merge_sources=merge_sources,
+            merge_sources=merge_sources, source_limit=source_limit,
         )
 
     _emit(_guard(go, as_json), as_json)

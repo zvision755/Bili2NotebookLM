@@ -95,7 +95,8 @@
 - 起因：V-2 第三次上传 40 个来源用了 27 分钟。先做离线分析（[V1.2_MERGE_SOURCES.md](V1.2_MERGE_SOURCES.md)）：每个来源约 6–8 个与大小无关的请求，合并把 ≈280 个降到 ≈14，数据块请求 ≈100 → ≈82；但历史数据点（每来源平均大小几乎相同）**无法把固定开销与字节吞吐分开**，所以提速幅度只能给区间（预期 0%–85%），需要真实试验。
 - 实现：先写 20 项失败测试，再加 `planner.plan_uploads(merge=)`、`Importer.run(merge_sources=)`、`import --merge-sources`；`merge_requested` 记入计划（冻结）与 `--json`；任务键不变。569 项测试全绿。
 
-## V1.2.3：最小合并（2026-11-10）
-- 起因：`--merge-sources` 的真实试验显示，本机到 Google 的网络会在传输中途断开，一个 122 MB 的合并音频连续失败 4 次、22 分钟没传完；小文件断一次损失很小。产品所有者决定：默认逐 P；超限时只合并到刚好不超限。
-- 实现：先改测试再改 `planner.plan_uploads`。超限时需减少 R = T − L 个来源，PDF 优先（先承担最多 `n_pdf − 1`），不够再合并音频；一类压成 g 组时按连续顺序切成大小相差 ≤ 1 的组，超 190 MiB 的组再按体积拆开，从"不合并"逐步试到第一个放得下的方案。计划新增 `merge_mode`（`minimal` / `fewest`）与 `merge_group_sizes`，`--json` 的 `upload_plan` 带上；`strategy` 仍为 `merged`；`--merge-sources` 不变。
-- 旧测试更新：`test_planner` 中三条断言"超限就并成最少"的测试（含 30 个分 P 合成 1 音频 + 1 PDF、按体积拆成 4 组）改为新语义；`test_multi_import::test_over_quota_merges_but_still_creates_one_notebook` 与 `test_part_selection::test_subset_over_quota_merges_with_an_honest_title` 的期望来源数/标题随之改变。净增 15 项离线用例（569 → 584）覆盖示例、体积拆组、无 PDF 的分 P、`--audio-only`、确定性、导入器端到端（只合并 PDF 时 PDF 目录页写"对应音频来源"、混合合并时写起始时间、重复导入复用、`PARTS_CHANGED`）。
+## V1.2.3：最小合并 + `--source-limit`（2026-11-10）
+- 起因：`--merge-sources` 的真实试验显示，本机到 Google 的网络会在传输中途断开，一个 122 MB 的合并音频连续失败 4 次、22 分钟没传完；小文件断一次损失很小。产品所有者决定：默认逐 P；超限时只合并到刚好不超限；测试时把账号当成“50 来源的免费用户”，即 25 组、每组同时有音频和 PDF。
+- 过程：先按“PDF 优先、音频逐 P”做了第一版并提交（`aa15e13`），随后按新要求整体替换为**对齐的均衡分组**：把分 P 切成 g 个大小相差 ≤ 1 的连续组，每组音频、PDF 各 1 个来源且边界一致，g 取使来源总数 ≤ 上限的最大值；组内合并文件超 190 MiB 则对半拆（音频与 PDF 一起）；无 PDF 的分 P 不进 PDF 来源；最少来源数仍超限则建本之前以退出码 27 失败。计划新增 `merge_mode`（`minimal` / `fewest`）、`merge_group_count`、`merge_group_sizes`；`--merge-sources` 不变。
+- 新增 `import --source-limit N`（N ≥ 2）：有效上限 = `min(账号上限, N)`，只更严；`limit_origin` 记为 `override`；非法值在任何网络调用之前报 `INVALID_URL`；已有同一选择的任务时沿用原计划并提示；不改变任务键。
+- 旧测试：`test_planner` 中三条断言“超限就并成最少”的测试按新语义重写；`test_multi_import::test_over_quota_merges_but_still_creates_one_notebook` 改为对齐分组（上限 4、3 个分 P → `P01+P02` 与 `P03` 各有音频和 PDF，共 4 个来源）并新增上限 2（一组）的端到端用例；其余见 `tests/unit/test_source_limit.py`。613 项离线测试全绿。
