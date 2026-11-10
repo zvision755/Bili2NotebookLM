@@ -12,7 +12,6 @@ from typer.core import TyperGroup
 from bili2nb import config
 from bili2nb.bilibili.parser import normalize_input
 from bili2nb.errors import Bili2nbError
-from bili2nb.notebook.auth import default_browser
 
 
 def ensure_utf8_streams() -> None:
@@ -56,7 +55,9 @@ class _DefaultImportGroup(TyperGroup):
 app = typer.Typer(
     cls=_DefaultImportGroup,
     help="Bilibili video -> NotebookLM (audio + keyframe PDF).\n\n"
-    "Usage: bili2notebooklm <B站链接 或 BV号>   (first run guides you through setup)",
+    "Usage: bili2notebooklm <B站链接 或 BV号>   (first run guides you through setup)\n\n"
+    "Multi-part (分P) videos: all parts go into ONE notebook unless you pick some with ?p=N or "
+    "--part (8, 8-27, 1,3,5, 1-3,7).",
     no_args_is_help=True,
 )
 auth_app = typer.Typer(help="NotebookLM authentication.", no_args_is_help=True)
@@ -82,7 +83,7 @@ def _make_store():
     return JobStore()
 
 
-def _setup_flow(work_dir: Path | None, browser: str, login: bool | None, as_json: bool) -> dict:
+def _setup_flow(work_dir: Path | None, browser: str | None, login: bool | None, as_json: bool) -> dict:
     """Choose the work dir and (optionally) log in to Google. `login=None` means ask."""
     interactive_dir = work_dir is None
     if interactive_dir:
@@ -98,15 +99,13 @@ def _setup_flow(work_dir: Path | None, browser: str, login: bool | None, as_json
     if login is None and not as_json:
         login = typer.confirm("现在打开浏览器登录 Google（登录状态只保存在本机，不会经过本工具）？", default=True)
     if login:
-        from bili2nb.notebook import auth
-
-        auth.run_login(browser)
+        _interactive_login(browser, interactive=not as_json and _is_tty())
         state = "done"
     return {"status": "ok", "work_dir": str(chosen), "login": state}
 
 
 def _run_setup_wizard() -> None:
-    _setup_flow(None, default_browser(), None, False)
+    _setup_flow(None, None, None, False)
 
 
 def _ensure_setup(interactive: bool) -> None:
@@ -114,6 +113,19 @@ def _ensure_setup(interactive: bool) -> None:
     if interactive and not config.is_configured():
         typer.echo("首次使用：先做一次简单设置。")
         _run_setup_wizard()
+
+
+def _is_tty() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _interactive_login(browser: str | None, *, interactive: bool) -> None:
+    """The ONE login entry point (setup / auth login / AUTH_REQUIRED offer): same default everywhere."""
+    from bili2nb.notebook import auth
+
+    auth.login_with_fallback(
+        browser, interactive=interactive, confirm=lambda msg: typer.confirm(msg, default=True)
+    )
 
 
 def _make_importer():
@@ -135,22 +147,22 @@ def _with_login_offer(fn, as_json: bool):
         typer.echo(f"[AUTH_REQUIRED] {e.message}", err=True)
         if not typer.confirm("现在打开浏览器登录 Google？", default=True):
             raise
-        from bili2nb.notebook.auth import run_login
-
-        run_login()
+        _interactive_login(None, interactive=True)
         return fn()  # preflight runs before any download, so re-running is safe
 
 
 @app.command("setup")
 def setup(
     work_dir: Path = typer.Option(None, "--work-dir", help="Work directory (skips the prompt)."),
-    browser: str = typer.Option(None, help="chrome, msedge or chromium (default: msedge on Windows, chrome elsewhere)."),
+    browser: str = typer.Option(
+        None, help="chromium (default on every OS; downloaded once, ~170 MB), or chrome / msedge to use an installed one."
+    ),
     no_login: bool = typer.Option(False, "--no-login", help="Do not open the Google login."),
     as_json: bool = typer.Option(False, "--json", help="Single JSON object on stdout."),
 ):
     """First-time setup: choose the work directory and log in to Google (once)."""
     try:
-        res = _setup_flow(work_dir, browser or default_browser(), False if no_login else None, as_json)
+        res = _setup_flow(work_dir, browser, False if no_login else None, as_json)
     except Bili2nbError as e:
         raise _fail(e, as_json) from None
     if as_json:
@@ -185,14 +197,12 @@ def doctor_cmd(
 @auth_app.command("login")
 def auth_login(
     browser: str = typer.Option(
-        None, help="chrome, msedge or chromium (bundled Playwright). Default: msedge on Windows, chrome elsewhere."
+        None, help="chromium (default on every OS; downloaded once, ~170 MB), or chrome / msedge to use an installed one."
     ),
 ):
     """One-time interactive Google sign-in in a browser window (you sign in yourself)."""
-    from bili2nb.notebook.auth import run_login
-
     try:
-        run_login(browser or default_browser())
+        _interactive_login(browser, interactive=_is_tty())
     except Bili2nbError as e:
         raise _fail(e, False)
     typer.echo("Login finished. Verify with: bili2nb auth check", err=True)
@@ -213,6 +223,12 @@ def auth_check(as_json: bool = typer.Option(False, "--json", help="Single JSON o
         typer.echo(f"Auth OK (account has {n} notebooks).")
 
 
+_PART_HELP = (
+    "Only these parts (P) of a multi-part video: 8, a range 8-27, a list 1,3,5, or both 1-3,7. "
+    "A ?p=N in the URL wins."
+)
+
+
 class Frames(str, Enum):
     auto = "auto"
     slides = "slides"
@@ -222,19 +238,22 @@ class Frames(str, Enum):
 
 @app.command("convert")
 def convert(
-    url: str = typer.Argument(..., help="Bilibili video URL (bilibili.com or b23.tv)"),
+    url: str = typer.Argument(..., help="Bilibili video URL or BV number (bilibili.com or b23.tv)"),
     frames: Frames = typer.Option(Frames.auto, "--frames", help="Keyframe mode."),
     output: Path = typer.Option(None, "--output", help="Output root dir (default: app data dir)."),
-    part: int = typer.Option(None, "--part", min=1, help="Part (P) number of a multi-part video."),
+    part: str = typer.Option(
+        None, "--part", metavar="SPEC", help=_PART_HELP + " Default: ALL parts."
+    ),
     audio_only: bool = typer.Option(False, "--audio-only", help="Audio only (same as --frames none)."),
     as_json: bool = typer.Option(False, "--json", help="Single JSON object on stdout."),
 ):
-    """Convert locally only (no Google login): audio + keyframes.pdf + manifest.json."""
-    from bili2nb.pipeline import convert as run
+    """Convert locally only (no Google login): per part audio + keyframes.pdf + manifest.json."""
+    from bili2nb.batch import convert_parts
 
     try:
-        res = run(
-            normalize_input(url), output_root=output, frames_mode=frames.value, part=part, audio_only=audio_only
+        res = convert_parts(
+            normalize_input(url), output_root=output, frames_mode=frames.value, part=part,
+            audio_only=audio_only,
         )
     except KeyboardInterrupt:
         raise _fail(Bili2nbError("INTERRUPTED", "已中断，临时文件已清理，未生成不完整的产物。"), as_json)
@@ -243,31 +262,49 @@ def convert(
     if as_json:
         sys.stdout.write(json.dumps(res, ensure_ascii=False) + "\n")
         return
-    typer.echo(f"OK  {res['video_title']}")
-    typer.echo(f"  output : {res['output_dir']}{'  (reused)' if res.get('reused') else ''}")
-    typer.echo(f"  audio  : {res['audio']['file']}  {res['audio']['bytes'] / 1e6:.1f} MB")
-    v = res["visual"]
-    if v["status"] == "ok":
-        typer.echo(f"  pdf    : keyframes.pdf  {v['pages']} pages  {v['pdf_bytes'] / 1e6:.1f} MB")
-    else:
-        typer.echo(f"  visual : {v['status']} - {v.get('reason', '')}")
+    typer.echo(f"OK  {res['video_title']}  ({len(res['parts'])}/{res['part_count']} part(s))")
+    typer.echo(f"  output : {res['output_dir']}")
+    for r in res["parts"]:
+        tag = "  (reused)" if r.get("reused") else ""
+        typer.echo(f"  P{r['part']:<3} {r['audio']['file']}  {r['audio']['bytes'] / 1e6:.1f} MB{tag}")
+        v = r["visual"]
+        if v["status"] == "ok":
+            typer.echo(f"       keyframes.pdf  {v['pages']} pages  {v['pdf_bytes'] / 1e6:.1f} MB")
+        else:
+            typer.echo(f"       visual : {v['status']} - {v.get('reason', '')}")
     for w in res.get("warnings", []):
         typer.echo(f"  warning: {w}")
-    typer.echo(f"  elapsed: {res['elapsed_sec']}s  {res['timings_sec']}")
 
 
 def _print_job(res: dict) -> None:
     typer.echo(f"{res['status'].upper()}  job {res['job_id']}  [{res['stage']}]  {res['video_title']}")
     if res.get("notebook_url"):
         typer.echo(f"  notebook : {res['notebook_url']}")
-    for kind, sid in res.get("source_ids", {}).items():
-        ready = "READY" if res.get("source_ready", {}).get(kind) else "not ready"
-        typer.echo(f"  source   : {kind:<5} {sid}  {ready}")
+    if res.get("parts"):
+        plan = res.get("upload_plan", {})
+        typer.echo(f"  parts    : {res['part_count']}  plan: {plan.get('strategy')}  "
+                   f"(account source limit {plan.get('source_limit')}, {plan.get('limit_origin')})")
+        for p in res["parts"]:
+            typer.echo(f"    P{p['part']:<3} {p['convert']:<8} {p['title']}")
+        for src in res.get("sources", []):
+            ready = "READY" if src["ready"] else ("uploaded" if src["source_id"] else "pending")
+            typer.echo(f"  source   : {src['title']}  {src['source_id'] or '-'}  {ready}")
+    else:
+        for kind, sid in res.get("source_ids", {}).items():
+            ready = "READY" if res.get("source_ready", {}).get(kind) else "not ready"
+            typer.echo(f"  source   : {kind:<5} {sid}  {ready}")
     typer.echo(f"  mode     : {res['mode']}  ({res['source_count']} source(s))"
                + ("  [reused existing]" if res.get("reused") else ""))
     for k in ("audio_path", "pdf_path"):
         if k in res:
             typer.echo(f"  {k:<9}: {res[k]}")
+    cl = res.get("cleanup") or {}
+    if cl.get("status") == "done":
+        from bili2nb.importer import human_bytes
+        typer.echo(f"  cleaned  : 已核对云端并清理本地文件，释放 {human_bytes(cl['freed_bytes'])}"
+                   + (f"（保留其它分 P：{len(cl['kept_other_parts'])} 个）" if cl.get("kept_other_parts") else ""))
+    elif cl.get("status") == "failed_verify":
+        typer.echo("  cleaned  : 云端核对未通过，本地文件已保留")
     if res.get("error_code"):
         typer.echo(f"  error    : {res['error_code']} - {res.get('error_message')}")
     for w in res.get("warnings", []):
@@ -296,10 +333,27 @@ def import_(
     url: str = typer.Argument(..., help="Bilibili video URL (bilibili.com or b23.tv)"),
     frames: Frames = typer.Option(Frames.auto, "--frames", help="Keyframe mode."),
     output: Path = typer.Option(None, "--output", help="Keep imported files under this dir."),
-    part: int = typer.Option(None, "--part", min=1, help="Part (P) number of a multi-part video."),
+    part: str = typer.Option(
+        None, "--part", metavar="SPEC", help=_PART_HELP + " Default: ALL parts, one notebook."
+    ),
     audio_only: bool = typer.Option(False, "--audio-only", help="Audio source only (no PDF)."),
     keep_files: bool = typer.Option(False, "--keep-files", help="Keep local audio/PDF after success."),
-    force_new: bool = typer.Option(False, "--force-new", help="Create another notebook for this video."),
+    force_new: bool = typer.Option(
+        False, "--force-new", help="Create another notebook for this video (exactly one, with the full part set)."
+    ),
+    merge_sources: bool = typer.Option(
+        False, "--merge-sources",
+        help="Multi-part only: merge consecutive parts into the FEWEST sources (audio and PDF each in "
+        "groups of <=190 MiB) even if the account's source limit would allow one source per part. "
+        "Default: one source per part, merged only when over the limit. Does not change the job key: "
+        "an existing import of the same selection is reused; add --force-new to redo it merged.",
+    ),
+    source_limit: str = typer.Option(
+        None, "--source-limit", metavar="N",
+        help="Testing aid: plan as if the account allowed at most N sources per notebook (N >= 2), e.g. "
+        "--source-limit 50 to rehearse a free account's limit when merging parts. Only ever stricter than "
+        "the real limit; does not change the job key (an existing import of the same selection is reused).",
+    ),
     as_json: bool = typer.Option(False, "--json", help="Single JSON object on stdout."),
 ):
     """Convert and import into a NEW NotebookLM notebook (audio + keyframe PDF), wait until READY."""
@@ -310,6 +364,7 @@ def import_(
         return _make_importer().run(
             normalize_input(url), frames_mode=frames.value, part=part, audio_only=audio_only,
             output=str(output) if output else None, keep_files=keep_files, force_new=force_new,
+            merge_sources=merge_sources, source_limit=source_limit,
         )
 
     _emit(_guard(go, as_json), as_json)
@@ -349,3 +404,60 @@ def jobs(limit: int = typer.Option(20, "--limit", min=1, help="Max jobs to show.
     for j in rows:
         typer.echo(f"{j.job_id}  {j.status:<11} {j.stage:<16} {(j.notebook_id or '-')[:8]:<9} "
                    f"{(j.video_title or '')[:40]}")
+
+
+@app.command("clean")
+def clean(
+    job_id: str = typer.Argument(None, help="Only this job (also allows the newest failed job; see --help)."),
+    yes: bool = typer.Option(False, "--yes", help="Really delete. Default: only list (dry run)."),
+    as_json: bool = typer.Option(False, "--json", help="Single JSON object on stdout."),
+):
+    """Free leftover local files of finished/abandoned import jobs (dry run unless --yes).
+
+    Lists failed/interrupted jobs that a newer job replaced, and completed jobs whose files are still on
+    disk. Never touches running jobs, the newest failed job (`retry` needs it) unless you name its id,
+    or anything kept via --keep-files / --output."""
+    from bili2nb import cleanup as cl
+    from bili2nb.config import default_output_root
+    from bili2nb.importer import human_bytes
+
+    store = _make_store()
+    jobs_all = store.list(1_000_000)
+    root = default_output_root()
+    try:
+        entries = cl.plan_clean(jobs_all, root, job_id=job_id)
+    except KeyError:
+        raise _fail(Bili2nbError("JOB_NOT_FOUND", f"找不到任务 {job_id}。用 `bili2nb jobs` 查看。"), as_json) from None
+    freed = 0
+    if yes:
+        by_id = {j.job_id: j for j in jobs_all}
+        for e in entries:
+            if e["skipped"] or not e["removed"]:
+                continue
+            j = by_id[e["job_id"]]
+            res = cl.cleanup_job_files(j, root, protect=cl.protected_dirs(jobs_all, {j.job_id}, root))
+            e.update(removed=res["removed"], freed_bytes=res["freed_bytes"], warnings=res["warnings"],
+                     kept_other_parts=res["kept_other_parts"])
+            freed += res["freed_bytes"]
+            if res["status"] == "done":
+                store.update(j.job_id, files_cleaned=True)
+        total = freed
+    else:
+        total = sum(e["size_bytes"] for e in entries)
+    if as_json:
+        sys.stdout.write(json.dumps({"dry_run": not yes, "total_bytes": total, "jobs": entries},
+                                    ensure_ascii=False) + "\n")
+        return
+    if not entries:
+        typer.echo("没有可清理的本地文件。")
+        return
+    for e in entries:
+        note = f"  [{e['skipped']}]" if e["skipped"] else ""
+        size = e.get("freed_bytes", e["size_bytes"])
+        typer.echo(f"{e['job_id']}  {e['status']:<11} {human_bytes(size):>10}  {(e['video'] or '')[:40]}{note}")
+        for w in e.get("warnings", []):
+            typer.echo(f"  warning: {w}")
+    if yes:
+        typer.echo(f"已清理，释放 {human_bytes(total)}。")
+    else:
+        typer.echo(f"可释放 {human_bytes(total)}。这是预览；加 --yes 才会真正删除。")

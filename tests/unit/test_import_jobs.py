@@ -87,7 +87,8 @@ class FakeNotebookLM:
             raise q.pop(0)
 
     def list_sources(self, nb):
-        return []
+        from bili2nb.notebook.adapter import SourceInfo
+        return [SourceInfo(i, None, st) for i, st in self.notebooks[nb].items()]
 
 
 class Env:

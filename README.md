@@ -8,7 +8,7 @@
 bili2notebooklm <B站链接 或 BV号>
 ```
 
-CLI 会自动下载音频、抽取关键画面生成 PDF、**新建一个笔记本**、上传这两个来源、等待 NotebookLM 处理完成（READY），最后打印笔记本链接。转录和总结都由 NotebookLM 自己完成，本地不跑 Whisper、不调用任何 LLM。
+CLI 会自动下载音频、抽取关键画面生成 PDF、**新建一个笔记本**、上传来源、等待 NotebookLM 处理完成（READY），最后打印笔记本链接。**多 P 视频默认处理全部分 P**：每个分 P 各自生成音频和 PDF，但所有分 P 只进**同一个**笔记本。转录和总结都由 NotebookLM 自己完成，本地不跑 Whisper、不调用任何 LLM。
 
 > 本机命令行。**macOS** 做过完整真实验证（含真实 NotebookLM 导入）；**macOS / Windows / Linux** 都由 GitHub Actions 自动测试（安装、离线测试、`doctor`、全局命令启动），但 Windows、Linux 上的真实 Google 登录与 NotebookLM 导入尚未验证。只处理你有权访问的公开视频；请遵守 B 站与版权规定，媒体文件只保存在本机。
 > NotebookLM 部分依赖**非官方**库 [notebooklm-py](https://github.com/teng-lin/notebooklm-py)（已固定 0.8.6），Google 可能随时改动接口导致失效。
@@ -39,7 +39,7 @@ bili2nb setup
 bili2nb BV1VV4y1V7Pz
 ```
 
-Windows 默认用系统自带的 **Edge** 登录 Google；想用 Chrome 就 `bili2nb setup --browser chrome`。工作目录默认是 `%APPDATA%\Bili2NotebookLM`。
+三个系统的登录方式一致：默认使用 Playwright 管理的 **Chromium**，**不需要**预先装 Chrome 或 Edge（首次登录会下载约 170 MB，只下载一次）。想用已装的浏览器就 `bili2nb setup --browser chrome`（或 `msedge`）。工作目录默认是 `%APPDATA%\Bili2NotebookLM`。
 
 ### macOS（终端）
 
@@ -61,7 +61,7 @@ bili2nb setup
 bili2nb BV1VV4y1V7Pz
 ```
 
-macOS 默认用 **Chrome** 登录；没有 Chrome 就 `bili2nb setup --browser msedge`。工作目录默认是 `~/Library/Application Support/Bili2NotebookLM`。
+登录默认使用 Playwright 管理的 **Chromium**，不需要装 Chrome（首次登录会下载约 170 MB，只下载一次）；想用已装的 Chrome 就 `bili2nb setup --browser chrome`。工作目录默认是 `~/Library/Application Support/Bili2NotebookLM`。
 
 ### Linux（Debian / Ubuntu 为例）
 
@@ -73,7 +73,7 @@ cd Bili2NotebookLM
 uv tool install . --overrides overrides.txt
 uv tool update-shell                                  # 然后重新打开终端
 bili2nb doctor
-bili2nb setup                                         # 登录 Google 需要桌面环境里的 Chrome 或 Edge
+bili2nb setup                                         # 登录 Google 需要图形桌面环境（默认自动下载 Chromium，不需要装 Chrome）
 ```
 
 ### 装好之后
@@ -114,11 +114,66 @@ bili2notebooklm --help
 ```bash
 bili2notebooklm "https://www.bilibili.com/video/BV1VV4y1V7Pz"   # 链接
 bili2notebooklm BV1VV4y1V7Pz                                    # 或只给 BV 号（也支持 av 号）
-bili2notebooklm BV1VV4y1V7Pz?p=3                                # 分 P
+bili2notebooklm BV1VV4y1V7Pz?p=3                                # 只处理第 3 个分 P（也可 --part 3；还可 --part 8-27 选一段）
 bili2notebooklm --json --keep-files BV1VV4y1V7Pz                # 选项放前面也行
 ```
 
 直接跟链接/BV 号就等于 `import`：下载音频、生成关键帧 PDF、**新建一个笔记本**、上传、等待 READY，最后打印笔记本链接。同一视频再次执行会直接返回原笔记本，不会重复创建。
+
+### 多 P 视频
+
+```bash
+bili2nb BV1xxxxxxxxx            # 没有指定 P：处理这个视频的全部分 P，只建 1 个笔记本
+bili2nb "BV1xxxxxxxxx?p=3"      # 只处理 P3（链接里的 p 优先于 --part）
+bili2nb BV1xxxxxxxxx --part 3   # 同上
+bili2nb BV1xxxxxxxxx --part 8-27     # 只处理 P8 到 P27（共 20 个分 P），仍然只建 1 个笔记本
+bili2nb BV1xxxxxxxxx --part 1,3,5    # 只处理 P1、P3、P5
+bili2nb BV1xxxxxxxxx --part 1-3,7    # 混合写法：P1、P2、P3、P7
+bili2nb BV1xxxxxxxxx --audio-only   # 每个分 P 只上传音频
+```
+
+`--part` 的写法：单个数字、范围 `a-b`、逗号列表，或它们的组合；重复的会去掉，并按升序处理。`0`、负数、倒序范围（`5-3`）、空项（`1,,2`）、字母等写法会直接报错（退出码 10，`INVALID_URL`），不会碰网络。链接里的 `?p=N` 始终优先于 `--part`。`convert` 与 `import` 用法一致。
+
+- 选了多个、但不是全部分 P：任务以所选集合为单位记忆（同一选择再次导入会复用原笔记本；换一个选择就是另一个任务、另一个笔记本）。只选 1 个分 P 与以前的 `--part N` 完全一样。选中了全部分 P 等同于不写 `--part`。
+- 来源标题里的 `P08｜…` 始终是视频里真实的分 P 序号；超额合并时，不连续的选择会写成 `P01+P03+P05` 这样的真实成员，而不是假装连续。
+
+- 一个 3 P 的视频会得到 1 个笔记本、6 个来源：`P01｜第一集｜音频`、`P01｜第一集｜关键帧PDF`、`P02｜…`。某个分 P 没有有效画面时，只上传它的音频并给出提示。
+- **先全部转换，再建笔记本**：所有分 P 都在本地转换、校验完、上传计划确认可行之后，才会在 NotebookLM 里创建笔记本。某个分 P 下载失败时云端什么都不会创建，已完成的分 P 下次直接复用（`bili2nb retry <job_id>`）。
+- 中断（Ctrl+C）或上传中途失败后 `retry` 只继续没完成的来源，不会重复建笔记本、不会重传已成功的来源。
+- 无法确定总分 P 数（B 站接口不可用）时，不会悄悄只处理 P1，而是报错并提示用 `--part` 指定（如 `--part 3` 或 `--part 1-5`）。
+- 每个分 P 的产物独立保存在 `<输出目录>/<BV号>/P01_标题/`，顶层 `manifest.json` 记录全部分 P 的状态；`--force-new` 只会新建一个笔记本。
+
+### 笔记本来源数量限制
+
+NotebookLM 每个笔记本有来源数量上限（免费账号目前是 50 个，付费等级更高）、单文件上限 200 MB。工具从你的账号**读取实际上限**（读不到时按 50 保守处理，并给出提示），然后：
+
+1. 放得下：每个分 P 各传音频和 PDF（默认，也是网络不稳时最稳妥的方式：断一次只损失一个小文件）。
+2. 放不下：**只合并到刚好不超限**，并且音频和 PDF **对齐**。把连续的分 P 切成 g 个大小均衡（相差不超过 1）的组；每一组的音频合并成 1 个来源、PDF 合并成 1 个来源，两者覆盖完全相同的分 P（“第 X 组 = P01–P05 的音频和 PDF”）；只有 1 个分 P 的组仍是原来的逐 P 来源。g 取**让来源总数不超限的最大值**，所以合并得最少。单个合并文件 ≤ 190 MiB：某组的合并音频或 PDF 超过它，就把这一组（音频和 PDF 一起）对半拆开。合并 PDF 带每个分 P 的书签，开头有目录页，列出各分 P 在合并音频里的起始时间。逐 P 的原文件仍保留在本地。例子（账号上限 50）：
+   - 30 个分 P（逐 P 要 60 个来源）：g=25，5 组两个分 P、20 组单个分 P，共 25 个音频 + 25 个 PDF = 50 个来源。
+   - 132 个分 P：g=25，7 组 6 个分 P、18 组 5 个分 P，共 50 个来源。
+   - 30 个分 P、上限 31：g=16 要 32 个来源，所以取 g=15（每组 2 个分 P），共 30 个来源。
+   - 上限 2：只有 1 组（1 个音频 + 1 个 PDF），前提是它们都 ≤ 190 MiB。
+3. 合并到体积上限允许的最少来源数后仍超限：**在创建笔记本之前**报错（退出码 27），写明需要多少来源、上限是多少，建议用 `--part`（如 `--part 1-20`）缩小范围。**绝不会**自动拆成多个笔记本。
+
+> 为什么不一口气合并成最少：真实试验里，一个 122 MB 的合并音频在这台机器到 Google 的网络上连续 4 次传输中途断开、22 分钟都没传完；小文件断一次损失很小。所以默认让文件尽量小。
+
+**模拟小额度：`--source-limit N`**（`import` 专用，N ≥ 2）。按“账号最多 N 个来源”来规划，用来在付费账号上预演免费账号（50 个来源）的合并行为：
+
+```bash
+bili2nb import BV1xxxxxxxxx --source-limit 50
+```
+
+实际生效的上限是 `min(账号读到的上限, N)`，只会更严、不会放宽；生效时 `--json` 的 `upload_plan.limit_origin` 为 `override`、`source_limit` 为有效值。它不改变任务键：同一选择已有任务时沿用原计划并提示，要按新上限重做请加 `--force-new`。
+
+**可选：`--merge-sources`**（只对一次选中 ≥ 2 个分 P 的 `import` 有意义，`convert` 没有）。来源数量放得下时默认仍是逐 P 上传，放不下时也只做最小合并；加上 `--merge-sources` 则无论是否超额，都把连续分 P 合并成**尽量少**的来源（音频、PDF 各自独立按单文件 ≤ 190 MiB 贪心分组，标题如 `P08-P27｜音频`，合并 PDF 的目录页列出各分 P 在合并音频里的起始时间）。
+
+```bash
+bili2nb BV1xxxxxxxxx --part 8-27 --merge-sources
+```
+
+- 它**不改变任务键**：同一视频、同一选择已有任务（不论是逐 P 还是合并导入的）就直接复用，不会重做；想按合并方式重新导入，请加 `--force-new`（会新建 1 个笔记本）。
+- 选中的分 P 只有 1 个时，开关被忽略并给一行提示。
+- 取舍：来源数少（上传的固定开销小、断点续传检查点少），但**在网络不稳时大文件上传失败的代价更大，可能反而更慢**——失败时重传的是整个大文件，且在 NotebookLM 里引用只会指向“合并音频”，要靠 PDF 目录页的时间点对应到具体分 P。是否更快见 [docs/V1.2_MERGE_SOURCES.md](docs/V1.2_MERGE_SOURCES.md)。
 
 ### 第一次使用：设置工作目录和 Google 登录
 
@@ -129,6 +184,12 @@ bili2notebooklm --json --keep-files BV1VV4y1V7Pz                # 选项放前�
    - Windows 默认：`%APPDATA%\Bili2NotebookLM`
    - 想改位置：再运行 `bili2notebooklm setup`，或直接 `bili2notebooklm setup --work-dir D:\bili2nb`；也可用环境变量 `BILI2NB_HOME`（优先级最高）。
 2. **Google 登录**：弹出浏览器，你自己登录 Google；工具只保存登录状态，不经过本工具、不进日志。之后无需重复登录（登录失效时会再提示）。不需要手工复制 Cookie，B 站公开视频也不需要 B 站 Cookie。
+   - 默认浏览器是 Playwright 管理的 **Chromium**（三个系统一致），不需要预装 Chrome 或 Edge。**首次登录会先下载约 170 MB 的浏览器组件**（显示进度，只下载一次，存放在 Playwright 的用户级缓存目录，不会改动你已有的 Chrome / Edge / Safari 及其设置）。
+   - 想用已装的浏览器：`bili2nb auth login --browser chrome`（或 `msedge`）。
+   - **下载失败**（网络或代理问题）：直接重新运行 `bili2nb auth login` 即可重试；需要代理时先设置 `HTTPS_PROXY`；或改用 `--browser chrome|msedge`。
+   - **浏览器没能启动 / 没在 5 分钟内登录完**：同样重新运行 `bili2nb auth login`；交互终端里，Chromium 失败且检测到本机有 Chrome 或 Edge 时，会询问是否改用它重试。
+   - Linux 需要图形桌面环境；无桌面的服务器请在有桌面的机器上登录一次。
+   - 暂不支持读取你已有浏览器里的 Google 登录状态（`--browser-cookies`）：它会读取浏览器里的全部 Google Cookie，隐私面更大，且各平台的 Cookie 加密/权限问题较多，见 [V1.2 设计](docs/V1.2_DESIGN.md)。
 
 非终端环境（脚本/`--json`）不会弹任何提问，缺登录时返回错误码 `AUTH_REQUIRED`。
 
@@ -138,7 +199,7 @@ bili2notebooklm --json --keep-files BV1VV4y1V7Pz                # 选项放前�
 bili2notebooklm convert BV1VV4y1V7Pz --output ./out      # 产物：audio.m4a、keyframes.pdf、manifest.json
 ```
 
-其他选项：`--part N`、`--frames auto|slides|scene|none`、`--audio-only`、`--keep-files`、`--force-new`（为同一视频另建笔记本）。
+`convert` 与 `import` 一样：没指定 P 就处理全部分 P（每个分 P 一个子目录）。其他选项：`--part N|a-b|a,b,c`、`--frames auto|slides|scene|none`、`--audio-only`、`--keep-files`、`--force-new`（为同一视频另建一个笔记本）；仅 `import`：`--merge-sources`（见上）。
 
 > Windows 说明：默认目录、ffmpeg 提示和登录流程已按 Windows 适配，但本项目目前只在 macOS 上做过真实验证；Windows 上若遇到问题请反馈。
 
@@ -175,6 +236,25 @@ bili2notebooklm convert BV1VV4y1V7Pz --output ./out      # 产物：audio.m4a、
 - **PDF**：我们选择**可读性优先，不为缩小体积降画质**。体积 ≈ 截图数 × 约 140–240 KB（实测 14 张 2.3 MB、42 张 10 MB）。能控制体积的只有这几项：页数上限 150、相似页去重、取帧间隔、只取 ≤720p 视频流；最坏情况约 150 × 240 KB ≈ 36 MB，远低于 200 MB 上限。
 - 上传用 2 MB 分块断点续传，大文件在不稳定网络下也能传完。
 
+## 本地文件会被怎么处理
+
+`import` 成功后，本地的音频 / 关键帧 PDF 已经没用了，工具会**自动清理**，避免磁盘越用越满：
+
+- **什么时候清**：任务整体完成之后，并且已经**核对过云端笔记本确实包含所有记录的来源**（多 P：全部来源都在且 READY；单 P：来源 ID 都在笔记本里）。核对没通过则**不清理**，文件保留并给出警告。清理发生在整个任务最后，不是边传边删。
+- **清什么**：只清**本次任务自己用到的**各分 P 文件夹（包括从缓存复用来的）、合并来源用的 `_merged/`，以及清空后的批次清单和 `<BV>/` 文件夹。同一个 `<BV>/` 里**本次没选中的分 P**（例如你之前用 `convert` 生成的）和其它无关文件**原样保留**，批次清单只改成描述剩下的分 P；所以导入别的分 P 不会误删你用 `convert` 做好的产物。所有待删路径必须在输出根目录之内，符号链接或越界路径一律跳过。清理出错只会给警告，不会让已成功的导入变失败。
+- **不清理**：用了 `--keep-files` 或 `--output`（你明确想保留文件）；失败 / 中断的任务（`retry` 续传需要这些文件）；直接返回已有笔记本的重复导入。
+- **看结果**：`--json` 里有 `cleanup`（`status`：`done` / `skipped` / `kept` / `failed_verify`，`freed_bytes`，`removed`，`kept_other_parts`），普通输出里有一行"释放了多少空间"。
+- **手动清理遗留文件**：失败后被新任务取代的旧任务、核对未通过而留下的文件，可以用 `clean`：
+
+```bash
+bili2notebooklm clean               # 只列出（预览），不删除
+bili2notebooklm clean --yes         # 真正删除上面列出的
+bili2notebooklm clean <job_id> --yes   # 只清这个任务（唯一能清"最新失败任务"的方式）
+bili2notebooklm clean --json        # 机器可读（stdout 只有一个 JSON）
+```
+
+  `clean` 不会碰：正在运行的任务、还能 `retry` 的最新失败任务（除非你点名 job id）、`--keep-files` / `--output` 保留的位置、输出根目录之外的任何东西；它只更新任务库里的 `files_cleaned`。`clean` 不联网，不核对云端，所以云端核对未通过留下的文件只会在你点名 job id 时才删。
+
 ## 失败后怎么办
 
 任务状态保存在你的工作目录里（默认见上文，文件名 `jobs.sqlite`；用 `bili2notebooklm setup` 或环境变量 `BILI2NB_HOME` 可以改位置）。
@@ -206,7 +286,8 @@ bili2notebooklm retry <job_id>       # 或直接重新 import
 | 13 | 缺少 ffmpeg 等工具 | 24 | 被限流 |
 | 14 | 磁盘空间不足 | 25 | 网络错误 |
 | 20 | 需要重新登录 | 26 | SDK 版本/接口不兼容（已在任何云端写入前安全停止，见 [SDK 私有接口清单](docs/SDK_PRIVATE_API.md)） |
-| 30 | 找不到任务 | 130 | 被用户中断 |
+| 27 | 来源数量/大小超出账号上限（即使合并分 P 也装不下；**未创建任何笔记本**） | 30 | 找不到任务 |
+| 28 | 该视频的分 P 与已有任务记录不一致（用 `--force-new` 重新导入） | 130 | 被用户中断 |
 | 1 | 内部错误 | | |
 
 ## 凭证与隐私

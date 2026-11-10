@@ -196,6 +196,22 @@ class NotebookAdapter:
 
         return self._run(op, default="AUTH_REQUIRED")
 
+    def source_limit(self) -> tuple[int, str]:
+        """Per-notebook source quota of THIS account -> (limit, origin).
+
+        origin "server": read from NotebookLM (public `settings.get_account_limits()`); "default":
+        the server gave no usable number, so the conservative documented free-tier value is used
+        (which can only make the planner merge MORE, never exceed a real quota)."""
+        from bili2nb.planner import DEFAULT_SOURCE_LIMIT
+
+        async def op(client):
+            return (await client.settings.get_account_limits()).source_limit
+
+        value = self._run(op, default="NETWORK_ERROR")
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value, "server"
+        return DEFAULT_SOURCE_LIMIT, "default"
+
     # -- notebooks / sources ---------------------------------------------
     def create_notebook(self, title: str, *, reconcile_sec: float = 20.0) -> str:
         """Create a notebook. Creation is NOT idempotent, so if the response is lost
@@ -244,6 +260,7 @@ class NotebookAdapter:
         *,
         reconcile_sec: float = 90.0,
         owned=(),
+        taken=(),
     ) -> str:
         """Upload one file WITHOUT waiting for processing; returns the source id.
 
@@ -261,10 +278,16 @@ class NotebookAdapter:
             file name/title, and are stuck; and/or
           * the id the SDK attached to its exception (`source_id`).
         READY/PROCESSING sources are never deleted.
+
+        `taken` = ids of sources this job already assigned to OTHER items. They are never reused
+        as "this file's earlier upload": every part of a multi-part video uploads a file with the
+        same name (audio.m4a / keyframes.pdf), and the display-title rename does not reliably
+        stick, so a bare name match would swallow the next part's upload (live, 2026-11-10).
         """
         sdk_compat.require("upload_file")  # stop BEFORE any cloud write if the SDK changed
         names = {path.name} | ({title} if title else set())
         owned_ids = {*owned, *self._pending_orphans}
+        taken_ids = set(taken)
 
         async def op(client):
             if os.environ.get("BILI2NB_CHUNKED_UPLOAD", "1") != "0":
@@ -275,7 +298,8 @@ class NotebookAdapter:
             before_ids = {s.id for s in before}
             # (1) leftovers we can PROVE are ours from earlier attempts
             await self._delete_owned(client, notebook_id, before, owned_ids)
-            usable = [s for s in before if s.title in names and s.status.name in _USABLE]
+            usable = [s for s in before
+                      if s.id not in taken_ids and s.title in names and s.status.name in _USABLE]
             if usable:
                 return usable[0].id
             try:
@@ -377,6 +401,55 @@ class NotebookAdapter:
             ]
 
         return self._run(op, default="NETWORK_ERROR")
+
+    def finalize_sources(self, notebook_id: str, titles: dict[str, str]) -> tuple[list[str], list[str]]:
+        """After READY: check what is REALLY in the notebook and apply the display titles.
+
+        `titles` maps source id -> wanted title. Returns (missing, untitled): ids that are not in
+        the cloud at all, and ids still carrying another title after a best-effort rename (the
+        server often keeps the file name; harmless for content, so it is only a warning). Only
+        sources this job recorded are renamed; nothing is ever deleted here."""
+
+        async def op(client):
+            have = {s.id: s for s in await client.sources.list(notebook_id)}
+            missing = sorted(i for i in titles if i not in have)
+            for sid, want in titles.items():
+                if sid in have and have[sid].title != want:
+                    with contextlib.suppress(Exception):  # cosmetic; reported via `untitled`
+                        await client.sources.rename(notebook_id, sid, want)
+            now = {s.id: s for s in await client.sources.list(notebook_id)}
+            untitled = sorted(i for i, want in titles.items() if i in now and now[i].title != want)
+            return missing, untitled
+
+        return self._run(op, default="NETWORK_ERROR")
+
+    def sweep_stuck_stubs(self, notebook_id: str, keep_ids, file_names) -> list[str]:
+        """Delete stuck (PREPARING/ERROR) registrations left behind by a dropped upload that a
+        later attempt could not prove were ours (live V-4, 2026-11-10: one `P113-P117_audio.m4a`
+        stub survived a retried upload and stayed PREPARING, counting against the source quota).
+
+        Ownership evidence = the cloud title is EXACTLY the local file name this job uploaded
+        (merged-group and staged per-part names are unique to the job) AND the source is stuck
+        AND it is not one of the ids the job recorded. READY/PROCESSING and everything else are
+        never touched. Best effort: never raises; returns the ids actually deleted."""
+        keep, names = set(keep_ids), set(file_names)
+        if not names:
+            return []
+
+        async def op(client):
+            deleted: list[str] = []
+            for s in await client.sources.list(notebook_id):
+                if s.id in keep or s.title not in names or s.status.name not in _STUCK:
+                    continue
+                with contextlib.suppress(Exception):
+                    await client.sources.delete(notebook_id, s.id)
+                    deleted.append(s.id)
+            return deleted
+
+        try:
+            return self._run(op, default="NETWORK_ERROR")
+        except Exception:  # noqa: BLE001 - cosmetic/quota hygiene must not fail a finished import
+            return []
 
     def wait_ready(self, notebook_id: str, source_id: str, timeout: float = 600.0) -> SourceInfo:
         """Block until the source is READY; raises SOURCE_NOT_READY on error/timeout."""

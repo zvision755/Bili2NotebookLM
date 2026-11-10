@@ -13,7 +13,7 @@ Please do **not** post exploit details, cookies or logs in public issues. Use Gi
 
 ## 本工具如何保护 Google 登录凭证
 
-- **登录由你本人在浏览器里完成**。工具不要求、也不接受手工粘贴 Cookie；不使用 `--master-token`、`--browser-cookies`（读取浏览器 Cookie 库）等方式。
+- **登录由你本人在浏览器里完成**。工具不要求、也不接受手工粘贴 Cookie；不使用 `--master-token`、`--browser-cookies`（读取浏览器 Cookie 库）等方式。V1.2 起默认使用 Playwright 管理的 Chromium：首次登录会从 Playwright 的官方下载地址下载该浏览器到用户级缓存目录，**不读取、不修改**你已有的 Chrome / Edge / Safari 及其 Cookie。
 - **登录状态保存位置**：由 `notebooklm-py` 保存在 `~/.notebooklm/profiles/<profile>/storage_state.json`（可用环境变量 `NOTEBOOKLM_HOME` 改位置；Windows 为 `%USERPROFILE%\.notebooklm\...`）。该文件包含登录会话 Cookie，等同于"登录凭证"。macOS / Linux 上目录权限为 `0700`、文件为 `0600`；Windows 依赖用户目录的访问控制（ACL）继承。
 - **本工具从不读取内容、不打印、不复制、不上传**该文件：`doctor` 只检查"文件是否存在"；任务库（SQLite）只保存任务 ID、视频 ID、笔记本/来源 ID、本地文件路径等，**不含 Cookie、令牌或请求头**；`--json` 的 stdout 只含结果或错误码；错误信息会过滤 SDK 异常文本，不回显凭证。
 - **B 站不需要 Cookie**：只处理公开视频，下载不使用任何 B 站登录信息。

@@ -141,6 +141,38 @@ jobs:
           cd "$HOME"
           python3 "$GITHUB_WORKSPACE/scripts/ci_smoke.py" --cmd bili2nb
 
+  chromium-launch:
+    # The default login browser is Playwright's bundled Chromium. Install it through bili2nb's own
+    # code path and start it on a local page (no Google). Runners already have Chrome/Edge, so this
+    # proves "installs and launches on this OS", not "works on a machine with no browser".
+    name: bundled Chromium / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          python-version: "3.12"
+      - run: uv sync
+      - name: Linux system libraries + virtual display
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+          sudo "$(uv run python -c 'import sys; print(sys.executable)')" -m playwright install-deps chromium
+      - name: Install and launch bundled Chromium (Linux, virtual display)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a uv run python scripts/ci_chromium_smoke.py
+      - name: Install and launch bundled Chromium
+        if: runner.os != 'Linux'
+        run: uv run python scripts/ci_chromium_smoke.py
+
   negative-control:
     # Proves the smoke check can FAIL: with a deliberately wrong expected exit code the script
     # must exit non-zero. If this job ever goes red, the smoke check has stopped being a check.

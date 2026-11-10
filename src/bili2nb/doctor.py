@@ -17,7 +17,7 @@ from pathlib import Path
 
 from bili2nb import config
 from bili2nb.media import audio, pdf
-from bili2nb.notebook import sdk_compat
+from bili2nb.notebook import auth, sdk_compat
 
 MIN_PYTHON = (3, 11)
 EXPECTED_NOTEBOOKLM_PY = "0.8.6"
@@ -58,26 +58,6 @@ def _tool_version(exe: str) -> str:
         return (out.splitlines() or [""])[0][:80]
     except (OSError, subprocess.SubprocessError):
         return ""
-
-
-def _find_browsers() -> list[str]:
-    cands: list[tuple[str, str]] = []
-    if sys.platform == "darwin":
-        cands = [("chrome", "/Applications/Google Chrome.app"), ("msedge", "/Applications/Microsoft Edge.app")]
-    elif sys.platform.startswith("win"):
-        roots = [os.environ.get(k) for k in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA")]
-        for r in filter(None, roots):
-            cands.append(("chrome", os.path.join(r, "Google", "Chrome", "Application", "chrome.exe")))
-            cands.append(("msedge", os.path.join(r, "Microsoft", "Edge", "Application", "msedge.exe")))
-    else:
-        for n, exe in (("chrome", "google-chrome"), ("msedge", "microsoft-edge")):
-            if shutil.which(exe):
-                cands.append((n, exe))
-    found = []
-    for name, path in cands:
-        if (os.path.exists(path) or shutil.which(path)) and name not in found:
-            found.append(name)
-    return found
 
 
 def _ffmpeg_checks() -> list[dict]:
@@ -164,11 +144,16 @@ def run_checks(online: bool = False) -> dict:
     else:
         checks.append(_check("google-login", "warn", "尚未登录 Google", "运行：bili2nb setup（或 bili2nb auth login）。未登录时 convert 仍可用，import 不可用"))
 
-    browsers = _find_browsers()
-    if browsers:
-        checks.append(_check("login-browser", "ok", "、".join(browsers)))
+    system = auth.system_browsers()
+    extra = f"（另检测到系统浏览器：{'、'.join(system)}，可用 --browser 选用）" if system else ""
+    if auth.chromium_installed():
+        checks.append(_check("login-browser", "ok", f"Playwright Chromium 已就绪（默认登录浏览器）{extra}"))
     else:
-        checks.append(_check("login-browser", "warn", "没找到 Chrome / Edge", "登录 Google 需要其中之一；Windows 自带 Edge，用 --browser msedge"))
+        checks.append(_check(
+            "login-browser", "warn",
+            f"Chromium 尚未下载（首次登录时自动下载，约 {auth.CHROMIUM_DOWNLOAD_MB} MB）{extra}",
+            "运行 bili2nb setup（或 bili2nb auth login）；网络受限时可用 --browser chrome / msedge 改用系统浏览器",
+        ))
 
     if online:
         from bili2nb.errors import Bili2nbError

@@ -7,22 +7,22 @@ sources that already exist.
 
 from __future__ import annotations
 
-import shutil
 import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
 
-from bili2nb import pipeline
+from bili2nb import cleanup as cleanup_mod
+from bili2nb import pipeline, planner
 from bili2nb.bilibili import downloader as dl
 from bili2nb.bilibili.parser import VideoRef, parse_url
 from bili2nb.config import default_output_root
 from bili2nb.errors import Bili2nbError
+from bili2nb.importer_multi import MultiPartMixin
 from bili2nb.jobs.db import COMPLETED, FAILED, INTERRUPTED, RUNNING, Job, JobStore
 from bili2nb.notebook.adapter import make_title, notebook_url
-
-RETRYABLE = ("RATE_LIMITED", "NETWORK_ERROR")
-MAX_ATTEMPTS = 5  # bounded: 1 try + 4 backoff retries, then fail with a resumable job
+from bili2nb.retry import MAX_ATTEMPTS, RETRYABLE, with_backoff  # noqa: F401  (re-exported)
+from bili2nb.selection import resolve_part
 
 
 def _stderr(msg: str) -> None:
@@ -35,7 +35,7 @@ def source_title(kind: str, video_title: str) -> str:
     return t if len(t) <= 100 else t[:99] + "…"
 
 
-class Importer:
+class Importer(MultiPartMixin):
     def __init__(
         self,
         store: JobStore,
@@ -43,6 +43,7 @@ class Importer:
         *,
         convert_fn: Callable[..., dict] | None = None,
         fetch_info_fn: Callable[[VideoRef], dl.VideoInfo] | None = None,
+        plan_parts_fn: Callable[..., list[dl.VideoInfo]] | None = None,
         sleep: Callable[[float], None] = time.sleep,
         log: Callable[[str], None] = _stderr,
         backoff_base: float = 3.0,
@@ -50,24 +51,21 @@ class Importer:
         self.store = store
         self.adapter = adapter
         self._convert = convert_fn
-        self._fetch_info = fetch_info_fn
+        if plan_parts_fn is not None:
+            self._plan_fn = plan_parts_fn
+        elif fetch_info_fn is not None:  # single-part helper (V1.1 callers/tests)
+            self._plan_fn = lambda ref: [fetch_info_fn(ref)]
+        else:
+            self._plan_fn = dl.plan_parts
         self.sleep = sleep
         self.log = log
         self.backoff_base = backoff_base
+        self._cloud_verified: set[str] = set()  # job ids whose sources were confirmed in the cloud THIS run
 
     # ------------------------------------------------------------ helpers
     def _backoff(self, fn: Callable[[], object], what: str):
         """Bounded retry with exponential backoff, only for errors safe to repeat."""
-        for i in range(MAX_ATTEMPTS):
-            try:
-                return fn()
-            except Bili2nbError as e:
-                if e.code not in RETRYABLE or i == MAX_ATTEMPTS - 1:
-                    raise
-                delay = self.backoff_base * (3**i)
-                self.log(f"  {what}: {e.code}，{delay:.0f}s 后重试 ({i + 1}/{MAX_ATTEMPTS - 1})…")
-                self.sleep(delay)
-        raise AssertionError("unreachable")
+        return with_backoff(fn, what, log=self.log, sleep=self.sleep, base=self.backoff_base)
 
     def _preflight(self) -> None:
         """Verify the NotebookLM session BEFORE any media is downloaded."""
@@ -102,16 +100,31 @@ class Importer:
         return self.store.update(job.job_id, timings=timings)
 
     # ------------------------------------------------------------ public API
-    def run(self, url: str, *, frames_mode: str = "auto", part: int | None = None,
+    def run(self, url: str, *, frames_mode: str = "auto", part: int | str | None = None,
             audio_only: bool = False, output: str | None = None, keep_files: bool = False,
-            force_new: bool = False) -> dict:
-        ref = parse_url(url)
-        if part is not None and ref.part is None:
-            ref = VideoRef(ref.video_id, part)
+            force_new: bool = False, merge_sources: bool = False,
+            source_limit: int | str | None = None) -> dict:
+        """`merge_sources`: merge consecutive parts into the fewest sources (multi-part only).
+        `part`: a part number or a `--part` spec (8 / 8-27 / 1,3,5 / 1-3,7); None = all parts.
+        `source_limit`: pretend the account allows at most this many sources (never looser than the real limit)."""
+        source_limit = planner.parse_source_limit(source_limit)  # bad value fails before any network
+        ref, chosen, warnings = resolve_part(parse_url(url), part)  # bad spec fails before any network
+        for w in warnings:
+            self.log(w)
         mode = "none" if audio_only else frames_mode
         self._preflight()
         self.log(f"解析视频信息: {ref.url}")
-        info = (self._fetch_info or dl.fetch_info)(ref)
+        infos = self._plan_fn(ref) if chosen is None else self._plan_fn(ref, selection=chosen)
+        if len(infos) > 1:  # several parts (no ?p=): one notebook for ALL of them
+            return self._run_multi(
+                ref, infos, mode=mode, frames_mode=frames_mode, audio_only=audio_only,
+                output=output, keep_files=keep_files, force_new=force_new, merge_sources=merge_sources,
+                source_limit=source_limit)
+        if source_limit is not None:
+            self.log("提示：只导入 1 个分 P，--source-limit 无意义，已忽略。")
+        if merge_sources:
+            self.log("提示：只导入 1 个分 P，--merge-sources 无意义，已忽略。")
+        info = infos[0]
         account = self.adapter.account_key
         existing = self.store.find_active(info.video_key, account, mode)
         if existing and not force_new:
@@ -156,10 +169,13 @@ class Importer:
         job = self.store.update(job.job_id, status=RUNNING, error_code=None, error_message=None,
                                 error_detail=None)
         try:
-            job = self._stage_convert(job, info)
-            job = self._stage_notebook(job)
-            job = self._stage_upload(job)
-            job = self._stage_ready(job)
+            if job.parts:  # multi-part job (V1.2)
+                job = self._multi_stages(job)
+            else:  # single part: the proven V1.1 path, also used by every pre-V1.2 job
+                job = self._stage_convert(job, info)
+                job = self._stage_notebook(job)
+                job = self._stage_upload(job)
+                job = self._stage_ready(job)
             job = self.store.update(job.job_id, status=COMPLETED, stage="done")
             job = self._cleanup(job)
             return self.result(job)
@@ -292,17 +308,61 @@ class Importer:
         job = self.store.update(job.job_id, stage="ready")
         return self._tick(job, "ready", t0)
 
+    def _cloud_holds_sources(self, job: Job) -> bool:
+        """Read-only check that every recorded source is really in the notebook (single-part path;
+        multi-part jobs get the same guarantee from `_m_finalize`)."""
+        if job.parts:
+            return job.job_id in self._cloud_verified
+        want = set(job.sources.values())
+        if not job.notebook_id or not want:
+            return False
+        try:
+            have = {s.id: s for s in self._backoff(
+                lambda: self.adapter.list_sources(job.notebook_id), "verify sources")}
+        except Bili2nbError:
+            return False
+        return all(sid in have and have[sid].status != "ERROR" for sid in want)
+
+    def _set_cleanup(self, job: Job, info: dict) -> Job:
+        return self.store.update(job.job_id, options={**job.options, "cleanup": info})
+
     def _cleanup(self, job: Job) -> Job:
-        """Success only: drop local media unless the user asked to keep it."""
+        """After COMPLETED, and only once the cloud is confirmed to hold every recorded source:
+        remove exactly the local files this job used (see bili2nb.cleanup). Never fails the import."""
         opts = job.options
-        if opts.get("keep_files") or opts.get("output") or not job.output_dir:
-            return job
-        shutil.rmtree(job.output_dir, ignore_errors=True)
-        return self.store.update(job.job_id, files_cleaned=True)
+        empty = {"freed_bytes": 0, "removed": [], "kept_other_parts": []}
+        if opts.get("keep_files") or opts.get("output"):  # the user wants the files
+            return self._set_cleanup(job, {"status": "kept", **empty})
+        if not cleanup_mod.job_dirs(job):
+            return self._set_cleanup(job, {"status": "skipped", **empty})
+        if not self._cloud_holds_sources(job):
+            job = self._add_warning(job, "云端核对未通过，已保留本地文件（可稍后用 `bili2nb clean` 清理）。")
+            return self._set_cleanup(job, {"status": "failed_verify", **empty})
+        try:
+            res = cleanup_mod.cleanup_job_files(job, default_output_root())
+        except Exception as exc:  # noqa: BLE001 - a cleanup problem must never fail a finished import
+            job = self._add_warning(job, f"本地清理出错（已忽略）：{type(exc).__name__}")
+            return self._set_cleanup(job, {"status": "skipped", **empty})
+        for w in res.pop("warnings"):
+            job = self._add_warning(job, w)
+        res.pop("manifest", None)
+        job = self._set_cleanup(job, res)
+        if res["status"] == "done":
+            job = self.store.update(job.job_id, files_cleaned=True)
+            self.log(f"本地文件已清理，释放 {human_bytes(res['freed_bytes'])}。")
+        return job
 
     # ------------------------------------------------------------ output
     def result(self, job: Job, *, reused: bool = False) -> dict:
         return job_to_dict(job, reused=reused)
+
+
+def human_bytes(n: int) -> str:
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if n < 1024 or unit == "GiB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n} B"
 
 
 def job_to_dict(job: Job, *, reused: bool = False) -> dict:
@@ -325,6 +385,7 @@ def job_to_dict(job: Job, *, reused: bool = False) -> dict:
         "orphan_source_ids": list(job.orphans),
         "visual": job.visual,
         "files_cleaned": job.files_cleaned,
+        "cleanup": job.options.get("cleanup"),
         "attempts": job.attempts,
         "timings_sec": job.timings,
         "warnings": list(job.warnings),
@@ -332,6 +393,21 @@ def job_to_dict(job: Job, *, reused: bool = False) -> dict:
         "created_at": job.created_at,
         "updated_at": job.updated_at,
     }
+    if job.parts:
+        plan = job.plan
+        d["part_count"] = job.options.get("part_count") or len(job.parts)  # the video's TOTAL
+        d["selection"] = job.options.get("selection", "all")
+        d["parts"] = [{k: v for k, v in p.items() if k != "info"} for p in job.parts]
+        d["upload_plan"] = {k: plan.get(k) for k in ("strategy", "source_limit", "limit_origin")}
+        d["upload_plan"]["merge_requested"] = bool(plan.get("merge_requested", False))
+        for k in ("merge_mode", "merge_group_sizes", "merge_group_count"):  # only merged plans carry them
+            if k in plan:
+                d["upload_plan"][k] = plan[k]
+        d["sources"] = [
+            {"key": i["key"], "kind": i["kind"], "parts": i["parts"], "title": i["title"],
+             "merged": i["merge"], "bytes": i["bytes"], "source_id": i["source_id"], "ready": i["ready"]}
+            for i in plan.get("items", [])
+        ]
     if Importer._file_ok(job.audio_path):
         d["audio_path"] = job.audio_path
     if Importer._file_ok(job.pdf_path):

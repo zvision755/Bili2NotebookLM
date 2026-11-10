@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,6 +27,8 @@ class VideoInfo:
     duration: float
     webpage_url: str
     part_count: int = 1
+    part_title: str = ""  # the 分P's own title (empty when unknown / single-part video)
+    series_title: str = ""  # the whole video's title (same for every part)
 
     @property
     def video_key(self) -> str:
@@ -71,8 +74,8 @@ def _ydl(opts):
 _RISK_CODES = {-412, -352, -799}  # risk-control/rate limiting: not proof the video is gone
 
 
-def fetch_view(video_id: str) -> tuple[int | None, str, list[dict]]:
-    """Public view API (no login) -> (code, message, pages). code None if unreachable."""
+def _view_json(video_id: str) -> tuple[int | None, str, dict]:
+    """ONE call to the public view API (no login) -> (code, message, data). code None if unreachable."""
     import json
     import urllib.parse
     import urllib.request
@@ -83,12 +86,38 @@ def fetch_view(video_id: str) -> tuple[int | None, str, list[dict]]:
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Macintosh) bili2nb"})
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
-            data = json.load(r)
-        code = int(data.get("code", -1))
-        pages = list((data.get("data") or {}).get("pages") or []) if code == 0 else []
-        return code, str(data.get("message", "")), pages
+            body = json.load(r)
+        code = int(body.get("code", -1))
+        return code, str(body.get("message", "")), (body.get("data") or {}) if code == 0 else {}
     except Exception:  # noqa: BLE001 - optional enrichment; yt-dlp remains the fallback
-        return None, "", []
+        return None, "", {}
+
+
+def fetch_view(video_id: str) -> tuple[int | None, str, list[dict]]:
+    """Public view API (no login) -> (code, message, pages). code None if unreachable."""
+    code, msg, data = _view_json(video_id)
+    return code, msg, list(data.get("pages") or [])
+
+
+@dataclass(frozen=True)
+class VideoMeta:
+    """Everything the view API says about a video, fetched once (all parts included)."""
+
+    code: int | None  # None = unreachable
+    message: str
+    bvid: str
+    title: str
+    uploader: str
+    pages: list[dict]
+
+
+def fetch_video(video_id: str) -> VideoMeta:
+    code, msg, data = _view_json(video_id)
+    owner = data.get("owner") or {}
+    return VideoMeta(
+        code=code, message=msg, bvid=str(data.get("bvid") or ""), title=str(data.get("title") or ""),
+        uploader=str(owner.get("name") or ""), pages=list(data.get("pages") or []),
+    )
 
 
 def fetch_pages(video_id: str) -> list[dict]:
@@ -164,3 +193,76 @@ def download_audio(ref: VideoRef, dest_dir: Path) -> Path:
 def download_video(ref: VideoRef, dest_dir: Path) -> Path:
     """Video-only stream (<=720p) used solely to pick keyframes."""
     return _download(ref, VIDEO_FORMAT, dest_dir, "video_src")
+
+
+def _enumerate_with_ytdlp(ref: VideoRef) -> int:
+    """Part count according to yt-dlp's playlist view (fallback when the view API is unusable)."""
+    import yt_dlp
+
+    try:
+        with _ydl(_opts(noplaylist=False, extract_flat="in_playlist")) as ydl:
+            d = ydl.extract_info(ref.url, download=False)
+    except yt_dlp.utils.DownloadError as exc:
+        raise classify_download_error(str(exc)) from exc
+    if d.get("_type") == "playlist":
+        return len([e for e in d.get("entries", []) if e])
+    return 1
+
+
+def _part_info(meta: VideoMeta, ref: VideoRef, page: dict, n: int, total: int) -> VideoInfo | None:
+    bvid = meta.bvid or ref.video_id
+    pname = str(page.get("part", "")).strip()
+    dur = page.get("duration")
+    if not dur:
+        return None  # metadata incomplete: the caller asks yt-dlp for this part only
+    cid = page.get("cid")
+    title = meta.title or bvid
+    if total > 1 and pname and pname not in title:
+        title = f"{title} (P{n} {pname})"
+    return VideoInfo(
+        video_id=bvid, cid=str(cid) if cid else None, part=n, title=title, uploader=meta.uploader,
+        duration=float(dur), part_count=total, part_title=pname, series_title=meta.title,
+        webpage_url=VideoRef(bvid, n).url if total > 1 or ref.part else VideoRef(bvid, None).url,
+    )
+
+
+def plan_parts(ref: VideoRef, selection: Sequence[int] | None = None) -> list[VideoInfo]:
+    """Resolve WHICH parts to process: the explicit ?p=N, else `selection` (ascending part numbers),
+    else ALL parts. Never a silent P1.
+
+    One view-API call yields every part's cid/title/duration, selected or not. If that API is unusable
+    (down or risk-controlled) and no part was requested, yt-dlp is only used to COUNT the parts; if even
+    that fails the user is told to pass --part. With an explicit selection yt-dlp is asked for those
+    parts only.
+    """
+    meta = fetch_video(ref.video_id)
+    if meta.code not in (0, None) and meta.code not in _RISK_CODES:
+        raise Bili2nbError(
+            "VIDEO_UNAVAILABLE", f"视频不存在、已删除或不可见（B站返回 {meta.code}: {meta.message}）。"
+        )
+    chosen = [ref.part] if ref.part else (sorted(set(selection)) if selection else None)
+    pages = meta.pages
+    if pages:
+        total = len(pages)
+        beyond = [n for n in chosen or [] if n > total]
+        if beyond:
+            raise Bili2nbError("VIDEO_UNAVAILABLE", f"该视频只有 {total} 个分 P，没有 P{beyond[0]}。")
+        wanted = chosen or list(range(1, total + 1))
+        infos: list[VideoInfo] = []
+        for n in wanted:
+            info = _part_info(meta, ref, pages[n - 1], n, total)
+            if info is None:  # no duration in the API for this part
+                info = fetch_info(VideoRef(ref.video_id, n))
+            infos.append(info)
+        return infos
+    # View API gave no pages.
+    if chosen:
+        return [fetch_info(VideoRef(ref.video_id, n)) for n in chosen]
+    try:
+        total = _enumerate_with_ytdlp(ref)
+    except Bili2nbError as e:
+        raise Bili2nbError(
+            e.code, f"{e.message} 无法确定该视频共有多少分 P，请用 --part 指定要处理的分 P（如 --part 3 或 --part 1-5）。",
+            detail=e.detail,
+        ) from e
+    return [fetch_info(VideoRef(ref.video_id, n)) for n in range(1, total + 1)]

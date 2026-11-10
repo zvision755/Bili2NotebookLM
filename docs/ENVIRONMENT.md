@@ -41,7 +41,7 @@ FFmpeg 许可注意：Homebrew 的 ffmpeg 为本机调用的系统工具，本�
 
 - 来源：PyPI 与 GitHub `teng-lin/notebooklm-py`；MIT；2026-10-29 发布 0.8.6（0.8.1→0.8.6 约每 2–3 周一版，迭代快，必须固定版本并做 contract test）。
 - 官方声明为**非官方、使用未公开 Google API，可能随时失效**；Google 已将 NotebookLM 更名为 Gemini Notebook（2026-07），库称仍可用。
-- 认证：`notebooklm login`（Playwright 打开浏览器由人工登录，保存 `storage_state.json` 到 `~/.notebooklm/profiles/<profile>/storage_state.json`）；`--browser chrome` 可用系统 Chrome；`notebooklm auth check [--test] [--passive] [--json]`；`notebooklm auth refresh`；`notebooklm auth logout`。本项目**不使用** `--master-token`、`--browser-cookies`（会读取浏览器 Cookie 库）。
+- 认证：`notebooklm login`（Playwright 打开浏览器由人工登录，保存 `storage_state.json` 到 `~/.notebooklm/profiles/<profile>/storage_state.json`）；`--browser chromium`（**V1.2 起为本项目在三个系统上的默认值**，由 Playwright 管理，首次使用时由本工具先行下载约 170 MB 到 Playwright 用户级缓存目录并显示进度；Linux 另需系统库与图形会话）、`--browser chrome` / `--browser msedge` 使用系统已装浏览器；`notebooklm auth check [--test] [--passive] [--json]`；`notebooklm auth refresh`；`notebooklm auth logout`。本项目**不使用** `--master-token`、`--browser-cookies`（会读取浏览器 Cookie 库）。
 - Python API（已用 `inspect` 核实签名）：
   - `NotebookLMClient.from_storage(path=None, timeout=30.0, profile=None, ...)`（异步上下文管理器）
   - `client.notebooks.create(title) -> Notebook`、`.get(id)`、`.get_or_none(id)`、`.list()`

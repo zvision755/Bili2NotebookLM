@@ -24,6 +24,114 @@
 
 ---
 
+## V1.2 验证记录（分支 `v1.2`，草稿 PR #1，2026-11-09；未合并 main）
+
+| 项目 | 结论 | 证据 |
+|---|---|---|
+| 离线测试 | PASS（549 项，其中 V1.2.1 的 `--part` 范围/列表 71 项） | `uv run pytest -q tests/unit`；Ruff 干净 |
+| 登录默认 Chromium（三平台一致、显式 chrome/msedge 透传、失败分类、回退只在交互时询问） | PASS（离线） | `tests/unit/test_login.py`（Mock 子进程，不启动浏览器、不访问 Google） |
+| 本机捆绑 Chromium 可启动 | PASS（仅 macOS 27 / arm64） | Chromium 156.0.8078.4，有窗口与无头模式均启动并渲染本地页面；未访问任何网站 |
+| Playwright 自带下载器在本机网络下失败 | 已记录（真实现象） | `playwright install chromium` 反复在 0% 报 "server closed connection"，curl 可下载同一文件；错误提示已覆盖重试/代理/改用 chrome 或 msedge |
+| 多 P 枚举（一次 API 调用取全部分 P；不退回 P1） | PASS（离线）+ 真实 | `tests/unit/test_parts.py`；真实视频 `BV1W64y147w7`（30 个分 P）一次取到全部 CID |
+| 真实 30 个分 P 的逐 P 转换（`--audio-only`，不登录） | PASS | 30/30 成功；30 个 CID 互不相同；各分 P 音频时长与元数据最大相差 1.1 s；顶层 manifest 30 项均为 done；无重复内容；音频合计 191.3 MB |
+| 真实 30 个分 P 的音频合并 | PASS | 多数派 44.1 kHz 直接复制，仅第 22 个（48 kHz）单独转换；13.4 s；188.8 MB（< 190 MiB 分组上限、< 200 MiB）；总时长 11833.9 s，与各 P 之和 11833.6 s 相差 0.3 s；整体解码通过。（初版实现整体重编码用时 141 s，真实数据暴露后改为"只转少数派"） |
+| 来源额度规划（逐 P / 合并 / 分组 / 不可行） | PASS（离线） | `tests/unit/test_planner.py`；真实 30 P 数据在额度 50 → 逐 P 30 个来源，额度 20 或 1 → 合并为 1 个来源 |
+| 多 P 导入引擎（1 个笔记本、重复导入复用、`--force-new`、P2 下载失败、P2 上传失败、Ctrl+C 恢复、超额合并、不可行在建本前失败、计划冻结、分 P 变化） | PASS（**仅 Mock NotebookLM**） | `tests/unit/test_multi_import.py`（25 项） |
+| `--part` 范围/列表语法（`8-27`、`1,3,5`、`1-3,7`；V1.2.1） | PASS（**仅离线 / Mock**） | `tests/unit/test_part_selection.py`（71 项）：解析（合法/非法/去重/升序/越界）、子集任务键与 `BV_all`/单 P 键互不串用且对同一选择稳定、子集导入 1 笔记本 2N 来源、重复导入复用、`--force-new`、`PARTS_CHANGED`、`convert` 子集、不连续选择的合并标题、`--json` 纯净、非法写法在任何网络调用前报 `INVALID_URL`（退出码 10） |
+| 旧版（V1.0 / V1.1）任务库迁移与兼容 | PASS（离线） | `tests/unit/test_db_migration.py`；V1.1 的全部导入测试未改动即通过 |
+| GitHub Actions（含新增的三平台 Chromium 安装/启动任务） | PASS（14/14，草稿 PR #1，提交 `f544b8f`，运行 42663338976） | 5 个 `test`（Ubuntu 3.11/3.12、Windows 3.11/3.12、macOS 3.12）、4 个 `tool install`、README 逐字执行、负向对照，以及新增的 3 个 `bundled Chromium`：Ubuntu（xvfb 虚拟显示）、macOS、Windows 均输出 `OK: bundled Chromium 156.0.8078.4 launched`。注意：runner 自带 Chrome/Edge，这只证明捆绑 Chromium 可经本工具的安装路径装上并启动，**不**证明干净机器可登录 |
+| **真实 NotebookLM 多 P 导入**（读取真实 `source_limit`、真实来源命名与 READY） | **PASS**（自动核对 + 用户网页问答反馈“可以答对”） | 2026-11-10 第三次真实运行（20 个分 P：`BV1z3NY66EY1` 的 P8–P27，`--part 8-27`）：1 个笔记本、40 个来源全部 READY、`source_limit`=300（server）、`per_part`、云端 40/40 标题与记录一致、幂等重跑 `reused: true`。前两次（2 P 视频）的 FAIL 与修复见下方“V-2 真实多 P 导入记录”；用户网页问答反馈“可以答对”（概括反馈，见“V-2 第三次”小节） |
+| Windows / Linux 真实登录与导入；无 Chrome/Edge 的干净机器 | **BLOCKED** | 未验证 |
+
+### V-2 真实多 P 导入记录（2026-11-10，用户逐次授权；真实 ID 不入库）
+
+测试视频：`BV1nqZqYxEzH`（公开，2 个分 P：642 s + 107 s）。本地 `convert` 演练 PASS（每个分 P 一个子目录、manifest 正确、音频时长 641.7 s / 106.3 s 与元数据一致）。账号来源上限：**`source_limit` = 300，`limit_origin` = `server`**（真实读到），计划 `per_part`、4 个来源。
+
+| 步骤 | 结论 | 证据 |
+|---|---|---|
+| 首次真实导入 `bili2nb BV1nqZqYxEzH --json` | **FAIL（严重缺陷）** | 笔记本数 28→29（恰好 +1）；任务返回 `completed`、`source_count: 4`、4 个 READY，但**云端只有 2 个来源**（P01 的音频与 PDF），且标题仍是 `audio.m4a` / `keyframes.pdf`。P02 的两次上传根本没有发生，其 `source_id` 与 P01 相同 |
+| 根因 | 已定位 | 多 P 每个分 P 的文件同名（`audio.m4a` / `keyframes.pdf`）；SDK 的来源标题重命名是“尽力而为”、在真实环境常不生效（账号里更早的单 P 笔记本同样如此）；`upload_file` 的“同文件名已存在则复用”把 P02 当成了 P01 已上传的来源。Mock 的多 P adapter 自带 `upload_file`、绕过了这段逻辑，所以离线测试看不出 |
+| 修复（先写失败测试） | PASS（离线） | `tests/unit/test_v12_live_regressions.py`：用**真实 `NotebookAdapter` + 仿线上行为的假 SDK 客户端**（标题保持文件名）复现。修复：① 其他条目已占用的来源 ID 不再被复用（`taken`）；② 导入器拒绝把同一云端来源记给两个条目；③ READY 后列出云端核对记录的来源是否都在、缺失则失败并清除记录供 retry，并补做标题重命名（改不成只给警告）；④ 复用路径（已 completed 的任务）也只读核对云端，缺口自愈续传、不再误报 `reused`；⑤ 上传时用同目录硬链接（不支持则复制）给每个分 P 的文件唯一名（`P02_audio.m4a`），上传后删除 |
+| 复验真实导入 `bili2nb BV1nqZqYxEzH --force-new --json` | **FAIL（工具如实报失败）** | 笔记本数 29→30（+1）。这次 4 个来源**都真实上传**（4 个不同 `source_id`，P02 不再被吞），标题除 P01 音频外均已生效；但 NotebookLM 把 **P02 音频**处理为 `ERROR`，任务返回 `failed / SOURCE_NOT_READY` 并提示 `retry`。未对该任务重试 |
+| P02 音频 ERROR 的诊断（只读） | 结论：**倾向 NotebookLM 对几乎无语音内容的处理失败，而非我们的上传；未做重传，故未 100% 证实** | 本地 P01/P02 音频格式一致（AAC-LC 44.1 kHz 双声道、分片 MP4、`moov` 在前、文件完整）；P02 仅 1.76 MB，小于 2 MiB 分块，是单块上传，无“分块不完整”可能；云端 ERROR 来源无 `word_count`/mime，创建后约 13 s 失败；同视频 P01 音频 READY，但 `word_count` 仅 134（10 分 42 秒），说明这个视频几乎没有可转写的语音 |
+| 幂等重跑（同一命令再跑） | **未做** | 复验未成功，无完整任务可复用；旧的被污染任务已由新逻辑（复用前核对云端）覆盖，单元测试验证其会续传而不是 `reused` |
+| 用户在网页里核对来源与提问 | **未做** | 待换用信息量大的视频后再做 |
+
+账号里因此留下 **2 个测试笔记本**（标题 `B站｜哥哥变成企鹅了怎么办？`；一个缺 P02，一个的 P02 音频为 ERROR），由用户自行删除；本验证未删除任何云端内容。
+
+**结论**：V-2 目前**不能标 PASS**。已验证的真实事实：账号 `source_limit` 真实读到（300/server）；修复后多 P 来源确实逐个上传并获得不同 ID；工具在 NotebookLM 拒绝一个来源时如实失败。待验证：换用有大量语音、画面为幻灯片/代码的 2–3 P 视频，做到 1 个笔记本、全部来源 READY、标题为 `P01｜…｜音频` 形式、幂等重跑 `reused: true`。
+
+### V-2 第三次：20 个分 P 的真实导入（2026-11-10，用户明确同意；真实 ID 不入库）
+
+测试视频：`BV1z3NY66EY1`（尚硅谷 LangGraph 教程，132 个分 P、约 21.3 小时；只取 **P8–P27 共 20 集**，“入门基础”，总时长 10586 s ≈ 2.94 h，音频合计 122.8 MB）。这次同时验证了新的 `--part 8-27` 范围语法。
+
+| 步骤 | 结论 | 证据 |
+|---|---|---|
+| 只读核对 | PASS | `fetch_video` 取到 132 个分 P；P8–P27 共 20 个，时长之和 10586 s |
+| 本地演练（`convert --part 8-27`，不登录） | PASS | 20/20 成功，5 分 26 秒；20 个分 P 子目录（`P008_…`–`P027_…`）；manifest `selection=P8-27`、20 项 done；各分 P 音频时长与元数据最多差约 1 s（如 P8 429 vs 428.7 s）；关键帧 PDF 共 48 MB |
+| 关键帧质量（如实观察） | 可用 | 每集 4–34 张截图（P9 4 张、P13 34 张、P18 31 张）；1280×720 原生分辨率，抽看 P9（HTML 运行图演示）与 P17（Typora 笔记，含代码块与参数说明）均清晰可读。相邻页近似重复仅 4 对（P14 三对、P22 一对）；没有发现明显漏掉的关键画面，但只抽看了两集，未逐页核对 |
+| 导入前后笔记本数 | PASS | `auth check`：30 → 31（恰好 +1） |
+| 真实导入 `bili2nb BV1z3NY66EY1 --part 8-27 --json` | **PASS** | exit 0，stdout 仅一个 JSON 对象；`status=completed`、`selection=P8-27`、`part_count=132`、`source_count=40`、`mode=frames:auto`、`attempts=1`、`warnings=[]`；`upload_plan = {per_part, source_limit 300, limit_origin server}`；40 个来源 ID 互不相同、全部 READY；来源标题均为 `P08｜…｜音频` / `P08｜…｜关键帧PDF` 形式，P08–P27 各 2 个；任务键 `BV1z3NY66EY1_P8-27` |
+| 云端核对（只读） | PASS | 列出笔记本来源：40 个、状态全为 READY、ID 集合与任务记录一致、40/40 标题与记录一致；没有来源被处理为 ERROR |
+| 耗时 | — | 总计 36 分 10 秒：转换 316 s（含下载）、建本 8 s、**上传 1617 s（约 27 分钟，占大头）**、等待 READY 217 s |
+| 过程中的瞬时错误 | 已自愈 | 上传 P15 PDF、P17 音频、P24 PDF 时各出现 1 次 `NETWORK_ERROR`，3 s 后按“先核对云端再重试”的逻辑重试成功，没有产生重复来源（40 个 ID 互不相同、云端恰好 40 个） |
+| 幂等重跑（同一命令） | PASS | `reused: true`，同一 `job_id` 与笔记本，`source_count` 仍为 40，来源 ID 集合不变；15 秒；`auth check` 笔记本数仍为 31 |
+| 用户在网页里的问答 | **PASS（用户概括反馈）** | 用户在该笔记本里问了 4 类问题（来源能否打开、语音内容题、画面信息点题、跨分 P 题），原话反馈：“可以答对”。**说明**：这是用户的概括性反馈，未逐题记录问题原文、答案正误细节，也未记录每个回答引用了哪些来源；因此只能确认“用户认为 4 类问题回答正确”，不能据此断言逐题全对或引用了正确来源 |
+
+账号里因此多了 **1 个测试笔记本**（31 个中的最后一个，标题以 `B站｜尚硅谷LangGraph教程` 开头），由用户自行删除；本验证未删除任何云端内容。
+
+## V1.2.2：`--merge-sources`（离线部分，2026-11-10）
+
+| 项目 | 结果 | 证据 |
+|---|---|---|
+| 单元测试 | **PASS** | 569 项全绿（原 549 + 新增 20：`tests/unit/test_merge_sources.py`）；`ruff check src tests scripts` 干净 |
+| 开关生效 | PASS | 3 个分 P、来源额度充足：`--merge-sources` → 2 个来源（`P01-P03｜音频`、`P01-P03｜关键帧PDF`），1 个笔记本；`upload_plan = {strategy: merged, merge_requested: true}` |
+| 默认不变 | PASS | 不加开关 → `per_part`、6 个来源、`merge_requested: false`；超额合并的旧路径不变 |
+| 单 P 忽略 | PASS | `--part 2` / `--part 2-2` 加开关 → 正常导入 2 个来源，日志恰好 1 行提示 |
+| 计划冻结 | PASS | 上传失败后改小账号额度再 `retry`，计划与 `merge_requested` 不变 |
+| 幂等键不变 | PASS | 先逐 P 再加开关 → `reused: true`、同一 job、仍 6 个来源，并提示 `--force-new`；先合并再不加开关同理；`--force-new` + 开关只新建 1 个笔记本 |
+| 大小上限 | PASS | 合并后每个来源 ≤ 190 MiB；600 MB 音频拆成 4 组，成员无丢失且保持顺序 |
+| 目录页 | PASS | 合并 PDF 目录页包含各分 P 及其在合并音频中的起始时间 |
+| CLI / `--json` | PASS | `import`/默认入口接受开关，stdout 仅一个 JSON 对象；`convert` 不接受（退出码 2）；旧任务无该字段时 `merge_requested` 显示为 false |
+
+B1 离线分析（预期）见 [V1.2_MERGE_SOURCES.md](V1.2_MERGE_SOURCES.md)。真实对比试验见“V-3：合并来源对比试验”（已执行：未观察到提速）。
+
+## V-3：合并来源对比试验（真实 NotebookLM，2026-11-10，用户授权的这一次）
+
+命令：`bili2nb BV1z3NY66EY1 --part 8-27 --merge-sources --force-new --json`（与 V-2 第三次同一视频、同一选择；只此一次，未追加运行）。
+
+| 项目 | 结果 |
+|---|---|
+| 笔记本数（`auth check`） | 31 → 32（恰好 +1） |
+| 任务 | exit 0，`completed`，`attempts=1`，`upload_plan = {merged, source_limit 300, server, merge_requested: true}` |
+| 来源 | 2 个：`P08-P27｜音频`（122.5 MB）、`P08-P27｜关键帧PDF`（48.1 MB），**均 READY**（2.9 小时的长音频被 NotebookLM 正常处理，无 ERROR） |
+| 过程中的网络错误 | 合并音频上传出现 **4 次 `NETWORK_ERROR`**（退避 3+9+27+81=120 s 后第 5 次成功）；PDF 一次成功。每次是整次上传重来（新会话），重传了多少字节无法从日志得知 |
+
+**与上一次逐 P 运行对比（同视频同选择，单次各一，网络波动大）**
+
+| | 逐 P（40 来源） | 合并（2 来源） |
+|---|---|---|
+| 转换 | 316 s | 323 s |
+| 合并文件生成（含在总耗时里，未单独计时） | — | ≈ 18 s（总耗时差额推算） |
+| 建本 | 8.5 s | 8.6 s |
+| **上传** | **1617 s** | **1830 s（+13%）** |
+| 等待 READY | 217 s | 173 s |
+| 总耗时 | 36 分 10 秒 | 39 分 13 秒 |
+| 传输字节 | ≈172 MB | ≈170.6 MB |
+| 有效吞吐（字节/上传耗时） | ≈0.106 MB/s | ≈0.093 MB/s（扣除 120 s 退避 ≈0.100 MB/s） |
+| 网络错误 | 3 次（各自 1 次重试成功） | 4 次（同一个文件连续失败） |
+
+**结论（如实）**
+- 在本机网络下，合并 **没有提速**：上传耗时反而略长（+13%），有效吞吐几乎相同（≈0.1 MB/s）。这支持 B1 里的 **H2（字节吞吐是瓶颈）**，而不是 H1（每来源固定开销主导）。每来源固定开销即使存在，也远小于 1617 s 里的总量。
+- 合并的代价：大文件连续 4 次整次失败，失败代价大（每次从头重传）；READY 阶段略快（173 s vs 217 s），但差异在波动范围内。
+- **置信度低**：每种方式只有 1 次真实运行，网络波动本身就能造成 ±20% 以上的差异；本次只能说“没有观察到提速”，不能证明合并必然更慢。更严格的 A/B 需要在同一时段交替各跑 ≥3 次、固定同一网络，并记录上传的实际字节数；本任务不再追加真实运行。
+- 建议：不改默认（仍逐 P，超限才合并）；`--merge-sources` 仅作可选项，不推荐作为提速手段。提速若有需要，应评估并行上传（需先确认 NotebookLM 的并发限制），而不是合并。
+- 网页问答（合并后笔记本的引用能否看出分 P、目录页是否有帮助）：**待用户反馈**。
+
+## 测试笔记本清理（用户授权）
+- 2026-11-10 已按用户授权删除 **2 个**测试笔记本（V-2 前两次真实运行、标题以 `B站｜哥哥变成企鹅了怎么办？` 开头；依据任务库记录的笔记本 ID 逐个核对后删除）。核对：`auth check` 32 → 30。
+- 仍保留、待用户说“可以删了”：LangGraph 逐 P 笔记本（标题以 `B站｜尚硅谷LangGraph教程` 开头）与本次合并试验笔记本。
+
 ## 历史验证记录（按时间顺序）
 
 ## Gate 0 — 环境可用与项目初始化
@@ -362,3 +470,36 @@ SceneDetect 失败 → 回退定时取帧并写 warning（单元测试覆盖）�
 - CI 实际抓到并促成修复的 Windows 问题：① 离线测试守卫禁止了所有 `connect()`，而 Windows 的 asyncio 用回环 `connect()` 建事件循环，导致所有异步测试失败（现放行回环地址）；② Typer 在 GitHub Actions 强制带颜色码，拆开了帮助文字里的选项名；③ ffmpeg 安装提示、文件权限（0600）的断言是 macOS 专属。
 - Windows CI 上 `bili2nb doctor` 实测：Python、ffmpeg、yt-dlp、opencv、notebooklm-py、中文字体（可嵌入）、工作目录（`%APPDATA%\Bili2NotebookLM`）均 OK；Google 登录为 WARN（CI 没有账号，符合预期）。
 - **未覆盖**：Windows / Linux 上的真实 Google 浏览器登录、真实 NotebookLM 导入、真实 B 站下载。
+
+## V-4：免费额度模拟（`--source-limit 50`）：`BV1z3NY66EY1` 全部 132 个分 P（真实 NotebookLM，2026-11-10，用户授权的这一次）
+
+命令：`bili2nb BV1z3NY66EY1 --source-limit 50 --json`（不带 `--keep-files` / `--output`）。用户账号实际上限为 300（Pro），本次按免费账号（50）模拟。
+前提偏差（如实记录）：任务设想复用 P8–P27 的本地缓存，但开跑前 `output/BV1z3NY66EY1/` 已不存在（此前成功导入后的精确清理已删除），所以 **132 个分 P 全部重新下载**（磁盘剩余约 120 GiB，高于 15 GiB 停止线）。
+
+**结论：PASS（自动核对 + 用户网页问答反馈）；同时发现并修复 1 个缺陷（见下）。**
+
+| 项目 | 结果 |
+|---|---|
+| 任务 | exit 0，`completed`，`attempts=1`，`reused=false`，`part_count=132`，`selection=all`，总时长 21.28 小时（76609 秒） |
+| 计划 | `upload_plan = {strategy: merged, source_limit: 50, limit_origin: override, merge_mode: minimal, merge_group_count: 25}`；组大小 7 组×6 + 18 组×5；音频与 PDF 分组边界一致，覆盖 P1–P132 且不重叠 |
+| 来源 | 记录 50 个，全部 `READY`，`orphan_source_ids=[]`；标题形如 `P01-P06｜音频` / `P01-P06｜关键帧PDF`；最大单个来源 56.6 MiB（≤190 MiB），合计 1241 MiB |
+| 笔记本数 | 前 30 → 后 31（恰好 +1） |
+| 云端独立读回（只读 SDK） | 云端共 51 个来源：记录的 50 个 id 与标题全部吻合且 `READY`；**多出 1 个**卡在 `PREPARING` 的残留（标题 `P113-P117_audio.m4a`），见缺陷 |
+| 耗时 | 总 7813 秒（约 2 小时 10 分）：转换 2566 秒（含下载 132 个分 P）、建本 8 秒、上传 4679 秒、等 READY 300 秒；其余为核对与清理 |
+| 吞吐 | 约 1241 MiB / 4679 秒 ≈ 0.27 MiB/s（约 2.1 Mbit/s，含逐个来源的往返与重试） |
+| 网络错误 | 上传中 4 次瞬时 `NETWORK_ERROR`（P37-P42 音频、P103-P107 PDF、P113-P117 音频、P128-P132 音频），均在第 1 次退避重试内自愈；无 B 站 412 / 限速；无需 `retry` |
+| 视觉 warning | P84、P124 画面变化很少，已补充定时取帧 |
+| 清理 | `cleanup.status=done`，`freed_bytes=2,600,819,316`，移除 135 项（132 个分 P 目录等），`kept_other_parts=[]`；`output/BV1z3NY66EY1/` 已不存在，其它视频目录未动。上传阶段输出目录抽样峰值约 2.4 GB。`df` 前后对比（可用 120.4 → 138.5 GiB）受本机其它进程影响，不能归因于清理，仅以 `freed_bytes` 为准 |
+| 幂等复跑 | 同一命令再跑：17 秒，`reused: true`，笔记本数仍为 31 |
+| 未验证 | 合并 PDF 的目录页（本地文件已被清理，未在本次再读）；请见用户网页检查 |
+
+### 发现并修复的缺陷：上传中断残留的 PREPARING 空壳来源不会被清掉
+- 现象：云端笔记本多出 1 个 `PREPARING` 空壳（`P113-P117_audio.m4a`，创建于 P113-P117 音频第一次上传 NETWORK_ERROR 的时刻）。程序自己的核对只检查"记录的来源都在"，所以仍报成功。免费账号若已有 50 个来源，这个空壳会占用额度。
+- 根因：失败那次尝试没有拿到所有权证据（`GET_NOTEBOOK` 连接错误，事后列表/对账没拿到空壳）；重试时空壳已在上传前快照里，`before` 里的卡住来源只有在 `owned` 里才删，且"上传期间新出现"的判断又把它排除在外。
+- 修复（先写失败测试，3 项）：`NotebookAdapter.sweep_stuck_stubs`——收尾核对后，只删**卡住状态（PREPARING/ERROR）、不在任务记录里、且标题恰好等于本任务上传过的文件名**的来源；READY/PROCESSING 与其它来源绝不碰；尽力而为，不会让已完成的导入失败；删了会加一条 warning。离线测试 642 项通过，ruff 干净。
+- 已存在的那个空壳：经用户明确同意（2026-11-10）后，用新方法 `sweep_stuck_stubs` 删除（只删这 1 个卡住的、不在记录里的来源）；删后云端读回恰为 50 个来源，id 与任务记录一致，全部 READY。修复只对之后的运行自动生效。
+
+### 用户网页验证反馈
+- 用户在 NotebookLM 网页里对该笔记本做了 11 题问答，概括反馈原话：“11题均已通过测试，质量可以接受”。题目由监工会话按分 P 标题设计，覆盖：LangChain/LangGraph 定位与三要素、基础 graph 代码步骤（画面题）、静态/动态扇入、重试/超时/缓存、PostgreSQL 检查点、checkpoint fork 的分 P 定位题、interrupt 人工审批、ToolNode/wrap_tool_call、子图持久化策略、图设计模型（最后一组 P128–P132）、全课知识结构综合题（含"哪一集讲的"定位）。
+- 用户在截图里确认笔记本为 50 个来源，标题 `P01-P06` … `P43-P47` 音频与 PDF 成对、边界对齐。
+- 局限：这是用户的概括反馈，未逐题记录答案与引用了哪些来源，不能夸大成"逐题全对"；合并 PDF 目录页是否列出各分 P 起始时间，反馈中未单独说明。
